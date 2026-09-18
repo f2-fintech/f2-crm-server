@@ -81,9 +81,20 @@ export class UsersService {
       10,
     );
 
+    // Derive the base role enum from the role document's name.
+    // The Role.name should match one of: SUPER_ADMIN, ADMIN, MANAGER, TEAM_LEADER, EMPLOYEE.
+    // We uppercase + underscore-convert common display names so "Team Leader" → "TEAM_LEADER".
+    const baseRole = role.name
+      .toUpperCase()
+      .replace(/\s+/g, '_');
+
+    const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEAM_LEADER', 'EMPLOYEE'];
+    const resolvedRole = allowedRoles.includes(baseRole) ? baseRole : 'EMPLOYEE';
+
     const createdUser = await this.userModel.create({
       ...createUserDto,
       employeeId,
+      role: resolvedRole,
       email: createUserDto.email.toLowerCase(),
       password: hashedPassword,
     });
@@ -109,16 +120,20 @@ export class UsersService {
    */
   private async generateEmployeeId(): Promise<string> {
     const lastUser = await this.userModel
-      .findOne()
+      .findOne({ employeeId: { $regex: /^EMP\d+$/ } })
       .sort({ createdAt: -1 });
 
-    if (!lastUser) {
+    if (!lastUser || !lastUser.employeeId) {
       return 'EMP000001';
     }
 
     const lastNumber = Number(
       lastUser.employeeId.replace('EMP', ''),
     );
+
+    if (isNaN(lastNumber)) {
+      return 'EMP000001';
+    }
 
     const nextNumber = lastNumber + 1;
 
@@ -199,7 +214,7 @@ export class UsersService {
       }
     }
 
-    // Validate Role
+    // Validate Role and derive base role enum
     if (updateUserDto.roleId) {
       const role = await this.roleModel.findById(
         updateUserDto.roleId,
@@ -208,6 +223,11 @@ export class UsersService {
       if (!role) {
         throw new NotFoundException('Role not found');
       }
+
+      // Derive the base role enum from the role document's name
+      const baseRole = role.name.toUpperCase().replace(/\s+/g, '_');
+      const allowedRoles = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEAM_LEADER', 'EMPLOYEE'];
+      (updateUserDto as any).role = allowedRoles.includes(baseRole) ? baseRole : 'EMPLOYEE';
     }
 
     // Validate Branch

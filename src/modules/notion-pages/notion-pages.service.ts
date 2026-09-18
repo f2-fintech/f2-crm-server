@@ -16,15 +16,10 @@ export class NotionPagesService {
   ) { }
 
   async createPage(createDto: any, user: any) {
-    let parentPageId = createDto.parentId;
-    let assignedMemberId = null;
-
-    if (parentPageId && parentPageId.startsWith('user_')) {
-      assignedMemberId = parentPageId.replace('user_', '');
-      parentPageId = null;
-    }
-
+    const parentPageId = createDto.parentId;
+    const assignedMemberId = createDto.assignedMemberId;
     const role = user.role?.toUpperCase();
+
     if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
       if (assignedMemberId && assignedMemberId !== user._id.toString()) {
         if (role === 'MANAGER') {
@@ -43,15 +38,11 @@ export class NotionPagesService {
       }
     }
 
-    // A "team root folder" id (from the sidebar's Shared Workspaces roots) is a
-    // Team _id, not a NotionPage _id. If a sub-page is created directly under a
-    // team root, don't try to store it as parentPageId (no such Page exists) —
-    // store it as a generic team page instead by leaving parentPageId null and
-    // relying on teamId, matching how getTree() groups "genericPages".
-    if (parentPageId && !parentPageId.startsWith('user_')) {
-      const isTeamRoot = await this.teamModel.exists({ _id: parentPageId });
-      if (isTeamRoot) {
-        parentPageId = null;
+    let teamId = user.teamId;
+    if (assignedMemberId) {
+      const assignedUser = await this.userModel.findById(assignedMemberId).lean();
+      if (assignedUser && assignedUser.teamId) {
+        teamId = assignedUser.teamId;
       }
     }
 
@@ -60,7 +51,7 @@ export class NotionPagesService {
       parentPageId: parentPageId ? new Types.ObjectId(parentPageId) : null,
       assignedMemberId: assignedMemberId ? new Types.ObjectId(assignedMemberId) : null,
       createdBy: user._id,
-      teamId: user.teamId,
+      teamId: teamId,
     });
     return page.save();
   }
@@ -98,8 +89,8 @@ export class NotionPagesService {
   async getTree(user: any) {
     const pages = await this.pageModel.find({ isDeleted: false }).lean();
 
-    let allowedTeamIds = [];
-    let allowedUserIds = [];
+    let allowedTeamIds: string[] = [];
+    let allowedUserIds: string[] = [];
     const role = user.role?.toUpperCase();
 
     if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
@@ -108,6 +99,7 @@ export class NotionPagesService {
       allowedTeamIds = activeTeams.map(t => t._id.toString());
       allowedUserIds = allUsers.map(u => u._id.toString());
     } else if (role === 'MANAGER') {
+      // Manager sees all pages in their team
       if (user.teamId) {
         allowedTeamIds = [user.teamId.toString()];
         const teamUsers = await this.userModel.find({ teamId: user.teamId, isActive: true }).lean();
@@ -116,146 +108,82 @@ export class NotionPagesService {
         allowedUserIds = [user._id.toString()];
       }
     } else if (role === 'TEAM_LEADER') {
-      if (user.teamId) allowedTeamIds = [user.teamId.toString()];
+      // TL only sees their own page + their direct reports' pages. NOT other TLs or other teams.
       const reports = await this.userModel.find({ reportsTo: user._id, isActive: true }).lean();
       allowedUserIds = [user._id.toString(), ...reports.map(r => r._id.toString())];
+      // No allowedTeamIds — don't show ALL team pages
     } else {
-      if (user.teamId) allowedTeamIds = [user.teamId.toString()];
+      // Employee sees ONLY their own assigned page
       allowedUserIds = [user._id.toString()];
+      // No allowedTeamIds
     }
 
-    const activeTeams = await this.teamModel.find({ isActive: true, ...(allowedTeamIds.length > 0 ? { _id: { $in: allowedTeamIds } } : {}) }).lean();
-    const allUsers = await this.userModel.find({ isActive: true, ...(allowedUserIds.length > 0 ? { _id: { $in: allowedUserIds } } : {}) }).lean();
-
-    const teamFolders = activeTeams.map(team => {
-      const teamIdStr = team._id.toString();
-      const teamMembers = allUsers.filter(u => u.teamId?.toString() === teamIdStr);
-
-      const memberNodes = teamMembers.map(u => {
-        const userIdStr = u._id.toString();
-        return {
-          _id: `user_${userIdStr}`,
-          id: `user_${userIdStr}`,
-          title: `${u.firstName} ${u.lastName} (${u.role === 'MANAGER' ? 'Manager' : 'Member'})`,
-          pageType: 'PAGE',
-          section: 'SHARED',
-          children: pages.filter(p => p.assignedMemberId?.toString() === userIdStr && !p.parentPageId)
-        };
-      });
-
-      const genericPages = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEAM_LEADER'].includes(role)
-        ? pages.filter(p => p.teamId?.toString() === teamIdStr && !p.parentPageId && !p.assignedMemberId)
-        : [];
-
-      return {
-        _id: teamIdStr,
-        id: teamIdStr,
-        title: team.name,
-        pageType: 'PAGE',
-        section: 'SHARED',
-        children: [...memberNodes, ...genericPages]
-      };
+    const allowedPages = pages.filter(p => {
+      if (['SUPER_ADMIN', 'ADMIN'].includes(role)) return true;
+      // Pages explicitly assigned to an allowed user
+      if (p.assignedMemberId && allowedUserIds.includes(p.assignedMemberId.toString())) return true;
+      // For Manager only: unassigned team pages (generic team sheets)
+      if (role === 'MANAGER' && p.teamId && allowedTeamIds.includes(p.teamId.toString()) && !p.assignedMemberId) return true;
+      // Admin/manager created pages
+      if (p.createdBy?.toString() === user._id.toString()) return true;
+      return false;
     });
 
+    const allowedPageIds = new Set(allowedPages.map(p => p._id.toString()));
+
+    const buildTree = (parentId: string | null) => {
+      return allowedPages
+        .filter(p => (parentId ? p.parentPageId?.toString() === parentId : !p.parentPageId))
+        .map(p => ({ ...p, children: buildTree(p._id.toString()) }));
+    };
+
+    // A page is a "root" for this user if:
+    //   1. It has no parent at all, OR
+    //   2. Its parent exists but is NOT visible to this user (parent not in allowedPages)
+    // This ensures TL/Employee pages that are physically nested under a Manager page
+    // still appear at the top of their sidebar since they can't see the parent.
+    const isRootForUser = (p: any) => {
+      if (!p.parentPageId) return true;
+      return !allowedPageIds.has(p.parentPageId.toString());
+    };
+
+    const sharedTree = allowedPages
+      .filter(p => p.section === 'SHARED' && isRootForUser(p))
+      .map(p => ({ ...p, children: buildTree(p._id.toString()) }));
+
+    const privateTree = allowedPages
+      .filter(p => p.section === 'PRIVATE' && isRootForUser(p) && p.createdBy?.toString() === user._id.toString())
+      .map(p => ({ ...p, children: buildTree(p._id.toString()) }));
+
+    const workspaceTree = allowedPages
+      .filter(p => p.section === 'WORKSPACE' && isRootForUser(p) && (['SUPER_ADMIN', 'ADMIN'].includes(role) || p.createdBy?.toString() === user._id.toString()))
+      .map(p => ({ ...p, children: buildTree(p._id.toString()) }));
+
     return {
-      shared: teamFolders,
-      private: pages.filter(p => p.section === 'PRIVATE' && p.createdBy?.toString() === user._id.toString()),
-      workspace: pages.filter(p => p.section === 'WORKSPACE' && (['SUPER_ADMIN', 'ADMIN'].includes(role) || p.createdBy?.toString() === user._id.toString())),
-      tree: pages
+      shared: sharedTree,
+      private: privateTree,
+      workspace: workspaceTree,
+      tree: allowedPages
     };
   }
 
-  
-  private async buildTeamRootNode(team: any, user: any, role: string) {
-    const teamIdStr = team._id.toString();
-    const pages = await this.pageModel.find({ isDeleted: false }).lean();
-    const teamMembers = await this.userModel.find({ teamId: team._id, isActive: true }).lean();
-
-    const memberNodes = teamMembers.map(u => {
-      const userIdStr = u._id.toString();
-      return {
-        _id: `user_${userIdStr}`,
-        id: `user_${userIdStr}`,
-        title: `${u.firstName} ${u.lastName} (${u.role === 'MANAGER' ? 'Manager' : 'Member'})`,
-        pageType: 'PAGE',
-        section: 'SHARED',
-        children: pages.filter(p => p.assignedMemberId?.toString() === userIdStr && !p.parentPageId)
-      };
-    });
-
-    const genericPages = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEAM_LEADER'].includes(role)
-      ? pages.filter(p => p.teamId?.toString() === teamIdStr && !p.parentPageId && !p.assignedMemberId)
-      : [];
-
-    return {
-      _id: teamIdStr,
-      id: teamIdStr,
-      title: team.name,
-      pageType: 'PAGE', // synthetic folder node, not a real sheet/page — no rows/columns of its own
-      section: 'SHARED',
-      rows: [],
-      columns: [],
-      children: [...memberNodes, ...genericPages]
-    };
+  async getEligibleUsers(user: any) {
+    const role = user.role?.toUpperCase();
+    if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
+      return this.userModel.find({ isActive: true }).select('_id firstName lastName role teamId reportsTo').lean();
+    } else if (role === 'MANAGER') {
+      if (!user.teamId) return [user];
+      return this.userModel.find({ teamId: user.teamId, isActive: true }).select('_id firstName lastName role teamId reportsTo').lean();
+    } else if (role === 'TEAM_LEADER') {
+      const reports = await this.userModel.find({ reportsTo: user._id, isActive: true }).select('_id firstName lastName role teamId reportsTo').lean();
+      return [user, ...reports];
+    }
+    return [user];
   }
 
   async getPageById(id: string, user: any) {
     const pages = await this.pageModel.find({ isDeleted: false }).lean();
-    const role = user.role?.toUpperCase();
-
-    if (id.startsWith('user_')) {
-      const userId = id.replace('user_', '');
-
-      if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
-        if (userId !== user._id.toString()) {
-          if (role === 'MANAGER') {
-            const targetUser = await this.userModel.findById(userId).lean();
-            if (!targetUser || targetUser.teamId?.toString() !== user.teamId?.toString()) {
-              throw new ForbiddenException('Not allowed to view this folder');
-            }
-          } else if (role === 'TEAM_LEADER') {
-            const targetUser = await this.userModel.findById(userId).lean();
-            if (!targetUser || targetUser.reportsTo?.toString() !== user._id.toString()) {
-              throw new ForbiddenException('Not allowed to view this folder');
-            }
-          } else {
-            throw new ForbiddenException('Not allowed to view this folder');
-          }
-        }
-      }
-
-      const targetUser = await this.userModel.findById(userId).lean();
-      if (!targetUser) throw new NotFoundException('User not found');
-
-      return {
-        _id: id,
-        id: id,
-        title: `${targetUser.firstName} ${targetUser.lastName}-`,
-        pageType: 'PAGE', // Empty page that just holds child sheets
-        section: 'SHARED',
-        rows: [],
-        columns: [],
-        children: pages.filter(p => p.assignedMemberId?.toString() === userId && !p.parentPageId)
-      };
-    }
-
-    // Team root folder (its id is a Team _id, not a NotionPage _id — see getTree()).
-    // Without this branch, selecting/auto-selecting a team root 404s against the
-    // pages collection since no such Page document exists.
-    if (Types.ObjectId.isValid(id)) {
-      const team = await this.teamModel.findById(id).lean();
-      if (team) {
-        if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
-          const isMyTeam = user.teamId?.toString() === id;
-          const canManageTeam = ['MANAGER', 'TEAM_LEADER'].includes(role) && isMyTeam;
-          if (!isMyTeam && !canManageTeam) {
-            throw new ForbiddenException('Not allowed to view this team folder');
-          }
-        }
-        return this.buildTeamRootNode(team, user, role);
-      }
-    }
-
+    
     const page = await this.pageModel.findById(id).lean();
     if (!page) throw new NotFoundException('Page not found');
 
@@ -268,18 +196,6 @@ export class NotionPagesService {
   }
 
   async updatePage(id: string, updateData: any, user: any) {
-    // Team root folders and user_ folders are synthetic containers, not real
-    // NotionPage documents — nothing to patch on them. Reject early instead
-    // of letting a stray PATCH from the client 404 against pageModel.
-    if (id.startsWith('user_')) {
-      throw new BadRequestException('Cannot update a user folder directly');
-    }
-    if (Types.ObjectId.isValid(id)) {
-      const isTeamRoot = await this.teamModel.exists({ _id: id });
-      if (isTeamRoot) {
-        throw new BadRequestException('Cannot update a team folder directly');
-      }
-    }
 
     const page = await this.pageModel.findById(id).lean();
     if (!page) throw new NotFoundException('Page not found');
@@ -297,16 +213,6 @@ export class NotionPagesService {
     const role = user.role?.toUpperCase();
     if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
       throw new ForbiddenException('Only admins can clear page data');
-    }
-
-    if (id.startsWith('user_')) {
-      throw new BadRequestException('Cannot clear data on a user folder');
-    }
-    if (Types.ObjectId.isValid(id)) {
-      const isTeamRoot = await this.teamModel.exists({ _id: id });
-      if (isTeamRoot) {
-        throw new BadRequestException('Cannot clear data on a team folder');
-      }
     }
 
     const page = await this.pageModel.findById(id).lean();

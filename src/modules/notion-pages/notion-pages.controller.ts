@@ -20,6 +20,11 @@ export class NotionPagesController {
     return this.pagesService.acceptInvite(body.token);
   }
 
+  @Get('eligible-users')
+  getEligibleUsers(@Req() req: Request) {
+    return this.pagesService.getEligibleUsers(req.user);
+  }
+
   @Get(':id')
   getPageById(@Param('id') id: string, @Req() req: Request) {
     return this.pagesService.getPageById(id, req.user);
