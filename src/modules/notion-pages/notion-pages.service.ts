@@ -65,22 +65,34 @@ export class NotionPagesService {
     return page.save();
   }
 
+  private async getRootAssignedMemberId(page: any): Promise<string | null> {
+    let current = page;
+    while (current && !current.assignedMemberId && current.parentPageId) {
+      current = await this.pageModel.findById(current.parentPageId).lean();
+    }
+    return current?.assignedMemberId ? current.assignedMemberId.toString() : null;
+  }
+
   private async checkAccess(page: any, user: any) {
     const role = user.role?.toUpperCase();
     if (['SUPER_ADMIN', 'ADMIN'].includes(role)) return true;
 
-    if (page.assignedMemberId) {
-      const assignedToId = page.assignedMemberId.toString();
+    const assignedToId = await this.getRootAssignedMemberId(page);
+
+    if (assignedToId) {
       if (assignedToId === user._id.toString()) return true;
 
-      if (role === 'MANAGER' && page.teamId?.toString() === user.teamId?.toString()) return true;
+      const assignedUser = await this.userModel.findById(assignedToId).lean();
+      if (!assignedUser) return false;
 
-      if (role === 'TEAM_LEADER') {
-        const assignedUser = await this.userModel.findById(assignedToId).lean();
-        if (assignedUser && assignedUser.reportsTo?.toString() === user._id.toString()) {
-          return true;
-        }
+      if (role === 'MANAGER' && assignedUser.teamId?.toString() === user.teamId?.toString()) {
+        return true;
       }
+
+      if (role === 'TEAM_LEADER' && assignedUser.reportsTo?.toString() === user._id.toString()) {
+        return true;
+      }
+
       return false;
     }
 
@@ -88,6 +100,7 @@ export class NotionPagesService {
       if (['MANAGER', 'TEAM_LEADER'].includes(role) && page.teamId.toString() === user.teamId?.toString()) {
         return true;
       }
+      if (page.createdBy?.toString() === user._id.toString()) return true;
       return false;
     }
 
@@ -98,8 +111,8 @@ export class NotionPagesService {
   async getTree(user: any) {
     const pages = await this.pageModel.find({ isDeleted: false }).lean();
 
-    let allowedTeamIds = [];
-    let allowedUserIds = [];
+    let allowedTeamIds: string[] = [];
+    let allowedUserIds: string[] = [];
     const role = user.role?.toUpperCase();
 
     if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
@@ -169,7 +182,26 @@ export class NotionPagesService {
   private async buildTeamRootNode(team: any, user: any, role: string) {
     const teamIdStr = team._id.toString();
     const pages = await this.pageModel.find({ isDeleted: false }).lean();
-    const teamMembers = await this.userModel.find({ teamId: team._id, isActive: true }).lean();
+    
+    let allowedUserIds: string[] = [];
+    if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
+      const allUsers = await this.userModel.find({ isActive: true }).lean();
+      allowedUserIds = allUsers.map(u => u._id.toString());
+    } else if (role === 'MANAGER') {
+      const teamUsers = await this.userModel.find({ teamId: user.teamId, isActive: true }).lean();
+      allowedUserIds = teamUsers.map(u => u._id.toString());
+    } else if (role === 'TEAM_LEADER') {
+      const reports = await this.userModel.find({ reportsTo: user._id, isActive: true }).lean();
+      allowedUserIds = [user._id.toString(), ...reports.map(r => r._id.toString())];
+    } else {
+      allowedUserIds = [user._id.toString()];
+    }
+
+    const teamMembers = await this.userModel.find({ 
+      teamId: team._id, 
+      isActive: true,
+      _id: { $in: allowedUserIds } 
+    }).lean();
 
     const memberNodes = teamMembers.map(u => {
       const userIdStr = u._id.toString();

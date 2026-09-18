@@ -17,6 +17,7 @@ import { CustomersModule } from './modules/customers/customers.module';
 import { ApplicationsModule } from './modules/applications/applications.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { NotionPagesModule } from './modules/notion-pages/notion-pages.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { NotionPagesModule } from './modules/notion-pages/notion-pages.module';
     ApplicationsModule,
     AttendanceModule,
     NotionPagesModule,
+    DashboardModule,
   ],
   controllers: [AppController],
   providers: [AppService],

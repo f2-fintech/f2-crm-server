@@ -18,7 +18,7 @@ import { CustomerQueryDto } from './dto/customer-query.dto';
 @ApiTags('Customers')
 @Controller('customers')
 export class CustomersController {
-  constructor(private readonly customersService: CustomersService) {}
+  constructor(private readonly customersService: CustomersService) { }
 
   @Post()
   @ApiOperation({ summary: 'Create Customer' })
@@ -82,36 +82,36 @@ export class CustomersController {
   }
 
   @Get('dashboard/stats')
-getDashboardStats() {
-  return this.customersService.getDashboardStats();
-}
+  getDashboardStats() {
+    return this.customersService.getDashboardStats();
+  }
 
-@Get('lead/:leadId')
-getCustomerByLeadId(
-  @Param('leadId') leadId: string,
-) {
-  return this.customersService.getCustomerByLeadId(
-    leadId,
-  );
-}
+  @Get('lead/:leadId')
+  getCustomerByLeadId(
+    @Param('leadId') leadId: string,
+  ) {
+    return this.customersService.getCustomerByLeadId(
+      leadId,
+    );
+  }
 
-@Get('application/:applicationId')
-getCustomerByApplicationId(
-  @Param('applicationId') applicationId: string,
-) {
-  return this.customersService.getCustomerByApplicationId(
-    applicationId,
-  );
-}
+  @Get('application/:applicationId')
+  getCustomerByApplicationId(
+    @Param('applicationId') applicationId: string,
+  ) {
+    return this.customersService.getCustomerByApplicationId(
+      applicationId,
+    );
+  }
 
-@Patch(':id/restore')
-restoreCustomer(@Param('id') id: string) {
-  return this.customersService.restoreCustomer(id);
-}
+  @Patch(':id/restore')
+  restoreCustomer(@Param('id') id: string) {
+    return this.customersService.restoreCustomer(id);
+  }
 
-@Delete(':id/permanent')
-permanentDelete(@Param('id') id: string) {
-  return this.customersService.permanentDelete(id);
-}
+  @Delete(':id/permanent')
+  permanentDelete(@Param('id') id: string) {
+    return this.customersService.permanentDelete(id);
+  }
 
 }

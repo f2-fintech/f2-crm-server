@@ -18,4 +18,4 @@ import { Customer, CustomerSchema } from './schemas/customer.schema';
   providers: [CustomersService],
   exports: [CustomersService],
 })
-export class CustomersModule {}
+export class CustomersModule { }

@@ -1,46 +1,78 @@
-import { Controller, Get, Post, Body, Param, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { AuthGuard } from '@nestjs/passport';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+
 import { TeamsService } from './teams.service';
 import { CreateTeamDto } from './dto/create-team.dto';
+import { UpdateTeamDto } from './dto/update-team.dto';
 import { AddMemberDto } from './dto/add-member.dto';
-import { RolesGuard } from '../../common/guards/roles.guard';
-import { Roles } from '../../common/decorators/roles.decorator';
 
 @ApiTags('Teams')
-@ApiBearerAuth()
-@UseGuards(AuthGuard('jwt'), RolesGuard)
 @Controller('teams')
 export class TeamsController {
   constructor(private readonly teamsService: TeamsService) {}
 
   @Post()
-  @Roles('SUPER_ADMIN', 'ADMIN')
-  @ApiOperation({ summary: 'Create a new team and assign a Manager' })
+  @ApiOperation({ summary: 'Create Team' })
+  @ApiResponse({
+    status: 201,
+    description: 'Team created successfully',
+  })
   create(@Body() createTeamDto: CreateTeamDto) {
     return this.teamsService.create(createTeamDto);
   }
 
-  @Post(':id/members')
-  @Roles('SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEAM_LEADER')
-  @ApiOperation({ summary: 'Add a user to the team and assign reporting hierarchy' })
-  addMember(
-    @Param('id') id: string, 
-    @Body() addMemberDto: AddMemberDto
-  ) {
-    return this.teamsService.addMember(id, addMemberDto);
+  @Get()
+  @ApiOperation({ summary: 'Get All Teams' })
+  @ApiResponse({
+    status: 200,
+    description: 'Teams fetched successfully',
+  })
+  findAll() {
+    return this.teamsService.findAll();
   }
 
-  @Get(':id/hierarchy')
-  @ApiOperation({ summary: 'Get the full tree hierarchy of the team' })
+  @Get('hierarchy/:id')
+  @ApiOperation({
+    summary: 'Get Team Hierarchy',
+  })
   getHierarchy(@Param('id') id: string) {
     return this.teamsService.getHierarchy(id);
   }
 
-  @Get()
-  @Roles('SUPER_ADMIN', 'ADMIN')
-  @ApiOperation({ summary: 'Get all teams' })
-  findAll() {
-    return this.teamsService.findAll();
+  @Post(':id/members')
+  addMember(@Param('id') id: string, @Body() addMemberDto: AddMemberDto) {
+    return this.teamsService.addMember(id, addMemberDto);
+  }
+
+  @Post(':id/members/sync')
+  syncMembers(
+    @Param('id') id: string,
+    @Body()
+    syncDto: {
+      managerId: string;
+      teamLeaderId?: string;
+      managerMemberIds: string[];
+      teamLeaderMemberIds: string[];
+    },
+  ) {
+    return this.teamsService.syncMembers(id, syncDto);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() updateTeamDto: UpdateTeamDto) {
+    return this.teamsService.update(id, updateTeamDto);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.teamsService.remove(id);
   }
 }

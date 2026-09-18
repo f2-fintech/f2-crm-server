@@ -72,6 +72,43 @@ export class TeamsService {
     return { message: 'Member added to team successfully', user: updatedUser };
   }
 
+  async syncMembers(teamId: string, syncDto: { managerId: string, teamLeaderId?: string, managerMemberIds: string[], teamLeaderMemberIds: string[] }) {
+    const { managerId, teamLeaderId, managerMemberIds, teamLeaderMemberIds } = syncDto;
+    
+    // 1. Unassign everyone currently in the team
+    await this.userModel.updateMany(
+      { teamId: new Types.ObjectId(teamId) },
+      { $unset: { teamId: 1, reportsTo: 1 } }
+    );
+    
+    // 2. Clear members array in team
+    await this.teamModel.findByIdAndUpdate(teamId, { members: [] });
+
+    // 3. Assign new Manager
+    const manager = await this.userModel.findById(managerId);
+    if(manager) {
+       manager.teamId = new Types.ObjectId(teamId);
+       manager.reportsTo = null as any;
+       await manager.save();
+       await this.teamModel.findByIdAndUpdate(teamId, { $push: { members: manager._id } });
+    }
+
+    // 4. Assign new Team Leader
+    if (teamLeaderId) {
+      await this.addMember(teamId, { userId: teamLeaderId, reportsTo: managerId });
+    }
+
+    // 5. Assign Members
+    for (const userId of managerMemberIds) {
+      await this.addMember(teamId, { userId, reportsTo: managerId });
+    }
+    for (const userId of teamLeaderMemberIds) {
+      await this.addMember(teamId, { userId, reportsTo: teamLeaderId });
+    }
+
+    return { message: 'Team members synced successfully' };
+  }
+
   async getHierarchy(teamId: string) {
     const team = await this.teamModel.findById(teamId).lean();
     if (!team) {
@@ -109,7 +146,31 @@ export class TeamsService {
     };
   }
 
+  async update(id: string, updateTeamDto: any) {
+    const team = await this.teamModel.findByIdAndUpdate(
+      id,
+      updateTeamDto,
+      { new: true, runValidators: true }
+    );
+    if (!team) {
+      throw new NotFoundException('Team not found');
+    }
+    return team;
+  }
+
+  async remove(id: string) {
+    const team = await this.teamModel.findByIdAndUpdate(
+      id,
+      { isActive: false },
+      { new: true }
+    );
+    if (!team) {
+      throw new NotFoundException('Team not found');
+    }
+    return { message: 'Team successfully deleted (deactivated)' };
+  }
+
   async findAll() {
-    return this.teamModel.find().populate('managerId', 'firstName lastName email role');
+    return this.teamModel.find({ isActive: true }).populate('managerId', 'firstName lastName email role');
   }
 }
