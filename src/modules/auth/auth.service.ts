@@ -139,29 +139,11 @@ export class AuthService {
       let user = await this.userModel.findOne({ email }).select('+password');
 
       if (!user) {
-        // Auto-create user if not found
-        const [firstName, ...lastNameParts] = (decodedToken.name || '').split(' ');
-        const lastName = lastNameParts.join(' ') || 'User';
-        
-        // Generate a random password for OAuth created accounts since they won't use it anyway
-        const randomPassword = Math.random().toString(36).slice(-10);
-        const hashedPassword = await bcrypt.hash(randomPassword, 10);
-        
-        const employeeId = `EMP${Math.floor(100000 + Math.random() * 900000)}`;
+        throw new UnauthorizedException('User account not found. Sign up is disabled.');
+      }
 
-        user = await this.userModel.create({
-          firstName: firstName || 'Google',
-          lastName,
-          email,
-          password: hashedPassword,
-          role: RoleEnum.EMPLOYEE,
-          employeeId,
-          isActive: true,
-        });
-      } else {
-        if (!user.isActive) {
-          throw new UnauthorizedException('Account disabled');
-        }
+      if (!user.isActive) {
+        throw new UnauthorizedException('Account disabled');
       }
 
       const token = await this.jwtService.signAsync({
