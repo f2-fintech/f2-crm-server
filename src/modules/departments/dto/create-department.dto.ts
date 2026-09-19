@@ -3,6 +3,7 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  IsMongoId,
   MinLength,
 } from 'class-validator';
 
@@ -23,8 +24,7 @@ export class CreateDepartmentDto {
   description?: string;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(100)
+  @IsMongoId()
   headOfDepartment?: string;
 
   @IsOptional()

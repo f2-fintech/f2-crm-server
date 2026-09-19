@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument } from 'mongoose';
+import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
 
 export type DepartmentDocument = HydratedDocument<Department>;
 
@@ -33,11 +33,11 @@ export class Department {
   description: string;
 
   @Prop({
-    default: '',
-    trim: true,
-    maxlength: 100,
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'User',
+    required: false,
   })
-  headOfDepartment: string;
+  headOfDepartment?: Types.ObjectId;
 
   @Prop({
     default: true,

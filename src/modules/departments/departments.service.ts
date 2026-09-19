@@ -18,7 +18,7 @@ export class DepartmentsService {
   constructor(
     @InjectModel(Department.name)
     private readonly departmentModel: Model<DepartmentDocument>,
-  ) {}
+  ) { }
 
   /**
    * Create Department
@@ -63,6 +63,7 @@ export class DepartmentsService {
   async findAll(): Promise<Department[]> {
     return this.departmentModel
       .find()
+      .populate('headOfDepartment', 'firstName lastName email profileImage')
       .sort({ createdAt: -1 })
       .exec();
   }
@@ -72,7 +73,7 @@ export class DepartmentsService {
    */
   async findOne(id: string): Promise<Department> {
     const department =
-      await this.departmentModel.findById(id);
+      await this.departmentModel.findById(id).populate('headOfDepartment', 'firstName lastName email profileImage');
 
     if (!department) {
       throw new NotFoundException(
@@ -142,7 +143,7 @@ export class DepartmentsService {
           new: true,
           runValidators: true,
         },
-      );
+      ).populate('headOfDepartment', 'firstName lastName email profileImage');
 
     return updatedDepartment!;
   }
