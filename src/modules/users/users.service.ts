@@ -83,6 +83,7 @@ export class UsersService {
 
     const createdUser = await this.userModel.create({
       ...createUserDto,
+      role: role.name,
       employeeId,
       email: createUserDto.email.toLowerCase(),
       password: hashedPassword,
@@ -110,9 +111,9 @@ export class UsersService {
   private async generateEmployeeId(): Promise<string> {
     const lastUser = await this.userModel
       .findOne()
-      .sort({ createdAt: -1 });
+      .sort({ employeeId: -1 });
 
-    if (!lastUser) {
+    if (!lastUser || !lastUser.employeeId) {
       return 'EMP000001';
     }
 
