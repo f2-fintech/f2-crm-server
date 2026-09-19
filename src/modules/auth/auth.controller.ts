@@ -25,6 +25,15 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
+  @Post('google')
+  @ApiOperation({ summary: 'Login or Register via Google SSO' })
+  googleLogin(@Body('idToken') idToken: string) {
+    if (!idToken) {
+      throw new Error('idToken is required');
+    }
+    return this.authService.googleLogin(idToken);
+  }
+
   @Post('forgot-password')
   @ApiOperation({ summary: 'Forgot Password' })
   forgotPassword(@Body() dto: ForgotPasswordDto) {

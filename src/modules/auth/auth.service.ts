@@ -18,6 +18,7 @@ import { CreateAuthDto } from './dto/create-auth.dto';
 import { LoginDto } from './dto/login-dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { auth } from '../../common/firebase';
 
 @Injectable()
 export class AuthService {
@@ -121,6 +122,78 @@ export class AuthService {
       token,
       user: userObj,
     };
+  }
+
+  /**
+   * Google SSO Login
+   */
+  async googleLogin(idToken: string) {
+    try {
+      const decodedToken = await auth.verifyIdToken(idToken);
+      const email = decodedToken.email?.toLowerCase();
+
+      if (!email) {
+        throw new BadRequestException('Google token did not contain an email');
+      }
+
+      let user = await this.userModel.findOne({ email }).select('+password');
+
+      if (!user) {
+        // Auto-create user if not found
+        const [firstName, ...lastNameParts] = (decodedToken.name || '').split(' ');
+        const lastName = lastNameParts.join(' ') || 'User';
+        
+        // Generate a random password for OAuth created accounts since they won't use it anyway
+        const randomPassword = Math.random().toString(36).slice(-10);
+        const hashedPassword = await bcrypt.hash(randomPassword, 10);
+        
+        const employeeId = `EMP${Math.floor(100000 + Math.random() * 900000)}`;
+
+        user = await this.userModel.create({
+          firstName: firstName || 'Google',
+          lastName,
+          email,
+          password: hashedPassword,
+          role: RoleEnum.EMPLOYEE,
+          employeeId,
+          isActive: true,
+        });
+      } else {
+        if (!user.isActive) {
+          throw new UnauthorizedException('Account disabled');
+        }
+      }
+
+      const token = await this.jwtService.signAsync({
+        sub: user._id,
+        email: user.email,
+        role: user.role,
+        employeeId: user.employeeId,
+      });
+
+      user.lastLogin = new Date();
+      await user.save();
+
+      await this.sessionModel.create({
+        userId: user._id,
+        token,
+        isActive: true,
+      });
+
+      const userObj: any = user.toObject();
+      delete userObj.password;
+
+      return {
+        message: 'Google login successful',
+        token,
+        user: userObj,
+      };
+    } catch (error) {
+      if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
+        throw error;
+      }
+      throw new UnauthorizedException('Invalid Google token');
+    }
   }
 
   /**
