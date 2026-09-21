@@ -73,6 +73,27 @@ export class DashboardService {
       };
     }
 
+    if (role === 'EMPLOYEE') {
+      const assignedPages = await this.pageModel.countDocuments({ assignedMemberId: user.id || user._id, isDeleted: false });
+      const pages = await this.pageModel.find({ assignedMemberId: user.id || user._id, isDeleted: false }).select('rows').lean();
+      const myLeads = pages.reduce((sum, page) => sum + (Array.isArray(page.rows) ? page.rows.length : 0), 0);
+
+      return {
+        success: true,
+        data: {
+          roleType: role,
+          stats: {
+            assignedPages,
+            myLeads,
+          },
+          recentActivity: [],
+          monthlyLeads: {
+            data: [],
+          },
+        },
+      };
+    }
+
     // Default Admin/Super Admin Dashboard
     const [
       totalUsers,
@@ -84,10 +105,10 @@ export class DashboardService {
     ] = await Promise.all([
       this.userModel.countDocuments(),
       this.userModel.countDocuments({ isActive: true }),
-      this.teamModel.countDocuments(),
-      this.branchModel.countDocuments(),
-      this.departmentModel.countDocuments(),
-      this.roleModel.countDocuments(),
+      this.teamModel.countDocuments({ isActive: true }),
+      this.branchModel.countDocuments({ isActive: true }),
+      this.departmentModel.countDocuments({ isActive: true }),
+      this.roleModel.countDocuments({ isActive: true }),
     ]);
 
     const recentUsers = await this.userModel
