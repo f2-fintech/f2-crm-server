@@ -110,22 +110,19 @@ export class UsersService {
    */
   private async generateEmployeeId(): Promise<string> {
     const lastUser = await this.userModel
-      .findOne()
+      .findOne({ employeeId: { $regex: /^EMP\d+$/ } })
+      .collation({ locale: 'en_US', numericOrdering: true })
       .sort({ employeeId: -1 });
 
     if (!lastUser || !lastUser.employeeId) {
       return 'EMP000001';
     }
 
-    const lastNumber = Number(
-      lastUser.employeeId.replace('EMP', ''),
-    );
-
+    const match = lastUser.employeeId.match(/^EMP(\d+)$/);
+    const lastNumber = match ? parseInt(match[1], 10) : 0;
     const nextNumber = lastNumber + 1;
 
-    return `EMP${nextNumber
-      .toString()
-      .padStart(6, '0')}`;
+    return `EMP${nextNumber.toString().padStart(6, '0')}`;
   }
 
   /**
