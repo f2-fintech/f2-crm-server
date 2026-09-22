@@ -25,6 +25,10 @@ export class NotionPagesService {
     }
 
     const role = user.role?.toUpperCase();
+    if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(role)) {
+      throw new ForbiddenException('Only managers and admins can create pages');
+    }
+
     if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
       if (assignedMemberId && assignedMemberId !== user._id.toString()) {
         if (role === 'MANAGER') {
@@ -32,13 +36,6 @@ export class NotionPagesService {
           if (!assignedUser || assignedUser.teamId?.toString() !== user.teamId?.toString()) {
             throw new ForbiddenException('Can only assign to your team members');
           }
-        } else if (role === 'TEAM_LEADER') {
-          const assignedUser = await this.userModel.findById(assignedMemberId).lean();
-          if (!assignedUser || assignedUser.reportsTo?.toString() !== user._id.toString()) {
-            throw new ForbiddenException('Can only assign to your direct reports');
-          }
-        } else {
-          throw new ForbiddenException('You can only create pages for yourself');
         }
       }
     }
@@ -319,8 +316,50 @@ export class NotionPagesService {
     const hasAccess = await this.checkAccess(page, user);
     if (!hasAccess) throw new ForbiddenException('You do not have access to update this page');
 
+    if (updateData.assignedMemberId && updateData.assignedMemberId !== page.assignedMemberId?.toString()) {
+      const role = user.role?.toUpperCase();
+      if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
+        if (role === 'MANAGER') {
+          const targetUser = await this.userModel.findById(updateData.assignedMemberId).lean();
+          if (!targetUser || targetUser.teamId?.toString() !== user.teamId?.toString()) {
+            throw new ForbiddenException('Can only assign to your team members');
+          }
+        } else if (role === 'TEAM_LEADER') {
+          const targetUser = await this.userModel.findById(updateData.assignedMemberId).lean();
+          if (!targetUser || targetUser.reportsTo?.toString() !== user._id.toString()) {
+            throw new ForbiddenException('Can only assign to your direct reports');
+          }
+        } else {
+          throw new ForbiddenException('Not allowed to reassign this page');
+        }
+      }
+    }
+
     const updatedPage = await this.pageModel.findByIdAndUpdate(id, updateData, { new: true });
     return updatedPage;
+  }
+
+  async deletePage(id: string, user: any) {
+    const role = user.role?.toUpperCase();
+    if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
+      throw new ForbiddenException('Only admins can delete pages');
+    }
+
+    if (id.startsWith('user_')) {
+      throw new BadRequestException('Cannot delete a user folder');
+    }
+    if (Types.ObjectId.isValid(id)) {
+      const isTeamRoot = await this.teamModel.exists({ _id: id });
+      if (isTeamRoot) {
+        throw new BadRequestException('Cannot delete a team folder');
+      }
+    }
+
+    const page = await this.pageModel.findById(id).lean();
+    if (!page) throw new NotFoundException('Page not found');
+
+    await this.pageModel.findByIdAndUpdate(id, { isDeleted: true });
+    return { success: true };
   }
 
   async clearPageData(id: string, user: any) {

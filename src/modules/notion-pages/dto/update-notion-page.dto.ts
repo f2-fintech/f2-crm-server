@@ -12,4 +12,8 @@ export class UpdateNotionPageDto {
   @IsOptional()
   @IsArray()
   columns?: any[];
+
+  @IsOptional()
+  @IsString()
+  assignedMemberId?: string;
 }

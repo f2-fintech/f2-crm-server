@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Patch, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Patch, Delete, UseGuards, Req } from '@nestjs/common';
 import { NotionPagesService } from './notion-pages.service';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
@@ -49,5 +49,10 @@ export class NotionPagesController {
   @Post(':id/clone')
   cloneFormat(@Param('id') id: string, @Body() body: any) {
     return this.pagesService.cloneFormat(id, body.targetParentId);
+  }
+
+  @Delete(':id')
+  deletePage(@Param('id') id: string, @Req() req: Request) {
+    return this.pagesService.deletePage(id, req.user);
   }
 }
