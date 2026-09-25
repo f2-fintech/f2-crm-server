@@ -57,7 +57,7 @@ export class User {
 
   @Prop({
     type: String,
-    enum: ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEAM_LEADER', 'EMPLOYEE'],
+    enum: ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEAM_LEADER', 'EMPLOYEE', 'SOURCER', 'CHANNEL_PARTNER'],
     default: 'EMPLOYEE',
     required: true,
     uppercase: true,
@@ -129,6 +129,15 @@ export class User {
     default: false,
   })
   isLocked: boolean;
+
+  @Prop({ type: Object, default: {} })
+  address: {
+    country?: string;
+    state?: string;
+    city?: string;
+    postalCode?: string;
+    streetAddress?: string;
+  };
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

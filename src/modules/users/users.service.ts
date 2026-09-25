@@ -126,17 +126,49 @@ export class UsersService {
   }
 
   /**
- * Get All Users
- */
-  async findAll(): Promise<User[]> {
-    return this.userModel
-      .find()
-      .select('-password -refreshToken')
-      .populate('roleId')
-      .populate('branchId')
-      .populate('departmentId')
-      .sort({ createdAt: -1 })
-      .exec();
+   * Get All Users
+   */
+  async findAll(query: any = {}): Promise<any> {
+    const { search, roleId, branchId, departmentId, isActive, page = 1, limit = 10 } = query;
+    const filter: any = {};
+
+    if (search) {
+      filter.$or = [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    if (roleId) filter.roleId = roleId;
+    if (branchId) filter.branchId = branchId;
+    if (departmentId) filter.departmentId = departmentId;
+    if (isActive !== undefined && isActive !== '') {
+      filter.isActive = isActive === 'true' || isActive === true;
+    }
+
+    const skip = (Number(page) - 1) * Number(limit);
+
+    const [data, total] = await Promise.all([
+      this.userModel
+        .find(filter)
+        .select('-password -refreshToken')
+        .populate('roleId')
+        .populate('branchId')
+        .populate('departmentId')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(Number(limit))
+        .exec(),
+      this.userModel.countDocuments(filter),
+    ]);
+
+    return {
+      data,
+      total,
+      page: Number(page),
+      limit: Number(limit),
+    };
   }
 
   /**
@@ -206,6 +238,9 @@ export class UsersService {
       if (!role) {
         throw new NotFoundException('Role not found');
       }
+      
+      // Update the string role field as well
+      (updateUserDto as any).role = role.name;
     }
 
     // Validate Branch

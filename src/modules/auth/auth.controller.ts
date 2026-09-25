@@ -1,12 +1,19 @@
-import { Body, Controller, Get, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Patch, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
+import { IsString, IsNotEmpty } from 'class-validator';
 
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login-dto';
 import { CreateAuthDto } from './dto/create-auth.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+
+export class GoogleLoginDto {
+  @IsString()
+  @IsNotEmpty()
+  idToken: string;
+}
 
 @ApiTags('Authentication')
 @Controller('auth')
@@ -27,11 +34,11 @@ export class AuthController {
 
   @Post('google')
   @ApiOperation({ summary: 'Login or Register via Google SSO' })
-  googleLogin(@Body('idToken') idToken: string) {
-    if (!idToken) {
+  googleLogin(@Body() dto: GoogleLoginDto) {
+    if (!dto.idToken) {
       throw new Error('idToken is required');
     }
-    return this.authService.googleLogin(idToken);
+    return this.authService.googleLogin(dto.idToken);
   }
 
   @Post('forgot-password')
@@ -50,7 +57,15 @@ export class AuthController {
   @UseGuards(AuthGuard('jwt'))
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get Current Profile' })
-  getProfile(@Req() req: any) {
-    return req.user;
+  async getProfile(@Req() req: any) {
+    return this.authService.getProfile(req.user._id);
+  }
+
+  @Patch('profile')
+  @UseGuards(AuthGuard('jwt'))
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update Current Profile' })
+  updateProfile(@Req() req: any, @Body() dto: any) {
+    return this.authService.updateProfile(req.user._id, dto);
   }
 }

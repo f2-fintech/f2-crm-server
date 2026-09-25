@@ -217,4 +217,65 @@ export class AuthService {
 
     return { message: 'Password reset successful' };
   }
+
+  /**
+   * Get Profile
+   */
+  async getProfile(userId: string) {
+    const user = await this.userModel.findById(userId)
+      .select('-password -refreshToken')
+      .populate('roleId')
+      .populate('branchId')
+      .populate('departmentId');
+      
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    
+    return { data: user };
+  }
+
+  /**
+   * Update Profile
+   */
+  async updateProfile(userId: string, dto: any) {
+    const user = await this.userModel.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    if (dto.email && dto.email.toLowerCase() !== user.email) {
+      const existing = await this.userModel.findOne({ email: dto.email.toLowerCase() });
+      if (existing) {
+        throw new ConflictException('Email already in use');
+      }
+      user.email = dto.email.toLowerCase();
+    }
+
+    if (dto.firstName) user.firstName = dto.firstName;
+    if (dto.lastName) user.lastName = dto.lastName;
+    if (dto.phone) user.phone = dto.phone;
+    if (dto.profileImage !== undefined) user.profileImage = dto.profileImage;
+
+    // Address fields
+    if (dto.country !== undefined) (user as any).country = dto.country;
+    if (dto.state !== undefined) (user as any).state = dto.state;
+    if (dto.city !== undefined) (user as any).city = dto.city;
+    if (dto.postalCode !== undefined) (user as any).postalCode = dto.postalCode;
+    if (dto.streetAddress !== undefined) (user as any).streetAddress = dto.streetAddress;
+    if (dto.address !== undefined) (user as any).address = dto.address;
+
+    await user.save();
+
+    const populatedUser = await this.userModel.findById(user._id)
+      .select('-password -refreshToken')
+      .populate('roleId')
+      .populate('branchId')
+      .populate('departmentId');
+
+    return {
+      message: 'Profile updated successfully',
+      data: populatedUser,
+    };
+  }
 }

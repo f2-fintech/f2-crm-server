@@ -73,7 +73,7 @@ export class DashboardService {
       };
     }
 
-    if (role === 'EMPLOYEE') {
+    if (['EMPLOYEE', 'SOURCER', 'CHANNEL_PARTNER'].includes(role)) {
       const assignedPages = await this.pageModel.countDocuments({ assignedMemberId: user.id || user._id, isDeleted: false });
       const pages = await this.pageModel.find({ assignedMemberId: user.id || user._id, isDeleted: false }).select('rows').lean();
       const myLeads = pages.reduce((sum, page) => sum + (Array.isArray(page.rows) ? page.rows.length : 0), 0);

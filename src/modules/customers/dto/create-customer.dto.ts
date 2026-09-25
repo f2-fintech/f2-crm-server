@@ -41,13 +41,13 @@ export class CreateCustomerDto {
   email?: string;
 
   @ApiProperty({
-    example: 'Delhi',
+    example: 'Bareilly',
   })
   @IsString()
   city: string;
 
   @ApiPropertyOptional({
-    example: 'Delhi',
+    example: 'Bareilly',
   })
   @IsOptional()
   @IsString()
