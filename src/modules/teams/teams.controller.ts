@@ -8,11 +8,29 @@ import {
   Post,
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { IsString, IsArray, IsOptional, IsObject } from 'class-validator';
 
 import { TeamsService } from './teams.service';
 import { CreateTeamDto } from './dto/create-team.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { AddMemberDto } from './dto/add-member.dto';
+
+export class SyncMembersDto {
+  @IsString()
+  managerId: string;
+
+  @IsOptional()
+  @IsArray()
+  teamLeaderIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  managerMemberIds?: string[];
+
+  @IsOptional()
+  @IsObject()
+  tlMembers?: Record<string, string[]>;
+}
 
 @ApiTags('Teams')
 @Controller('teams')
@@ -55,15 +73,9 @@ export class TeamsController {
   @Post(':id/members/sync')
   syncMembers(
     @Param('id') id: string,
-    @Body()
-    syncDto: {
-      managerId: string;
-      teamLeaderIds?: string[];
-      managerMemberIds: string[];
-      teamLeaderMemberIds: string[];
-    },
+    @Body() syncDto: SyncMembersDto,
   ) {
-    return this.teamsService.syncMembers(id, syncDto);
+    return this.teamsService.syncMembers(id, syncDto as any);
   }
 
   @Patch(':id')

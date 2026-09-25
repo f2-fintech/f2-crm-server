@@ -72,8 +72,8 @@ export class TeamsService {
     return { message: 'Member added to team successfully', user: updatedUser };
   }
 
-  async syncMembers(teamId: string, syncDto: { managerId: string, teamLeaderIds?: string[], managerMemberIds: string[], teamLeaderMemberIds: string[] }) {
-    const { managerId, teamLeaderIds = [], managerMemberIds, teamLeaderMemberIds } = syncDto;
+  async syncMembers(teamId: string, syncDto: any) {
+    const { managerId, teamLeaderIds = [], managerMemberIds = [], tlMembers = {} } = syncDto;
     
     // 1. Unassign everyone currently in the team
     await this.userModel.updateMany(
@@ -103,10 +103,13 @@ export class TeamsService {
       await this.addMember(teamId, { userId, reportsTo: managerId });
     }
     
-    // Distribute team leader members across the first team leader for now or just assign them to the first TL
-    const firstTlId = teamLeaderIds.length > 0 ? teamLeaderIds[0] : managerId;
-    for (const userId of teamLeaderMemberIds) {
-      await this.addMember(teamId, { userId, reportsTo: firstTlId });
+    // 6. Assign Team Leader Members
+    for (const [tlId, memberIds] of Object.entries(tlMembers)) {
+      if (Array.isArray(memberIds)) {
+        for (const userId of memberIds) {
+          await this.addMember(teamId, { userId: userId as string, reportsTo: tlId });
+        }
+      }
     }
 
     return { message: 'Team members synced successfully' };
