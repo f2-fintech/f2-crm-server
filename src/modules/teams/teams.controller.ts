@@ -58,7 +58,7 @@ export class TeamsController {
     @Body()
     syncDto: {
       managerId: string;
-      teamLeaderId?: string;
+      teamLeaderIds?: string[];
       managerMemberIds: string[];
       teamLeaderMemberIds: string[];
     },

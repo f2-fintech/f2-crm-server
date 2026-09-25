@@ -2,8 +2,41 @@ import { Controller, Get, Post, Body, Param, Patch, Delete, UseGuards, Req } fro
 import { NotionPagesService } from './notion-pages.service';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
-
+import { IsOptional, IsString } from 'class-validator';
 import { UpdateNotionPageDto } from './dto/update-notion-page.dto';
+
+export class AcceptInviteDto {
+  @IsString()
+  token: string;
+}
+
+export class CreatePageDto {
+  @IsString()
+  title: string;
+
+  @IsOptional()
+  @IsString()
+  pageType?: string;
+
+  @IsOptional()
+  @IsString()
+  section?: string;
+
+  @IsOptional()
+  @IsString()
+  parentId?: string;
+}
+
+export class ShareEmailDto {
+  @IsString()
+  email: string;
+}
+
+export class CloneFormatDto {
+  @IsOptional()
+  @IsString()
+  targetParentId?: string;
+}
 
 @Controller('notion-pages')
 @UseGuards(AuthGuard('jwt'))
@@ -16,7 +49,7 @@ export class NotionPagesController {
   }
 
   @Post('accept-invite')
-  acceptInvite(@Body() body: any) {
+  acceptInvite(@Body() body: AcceptInviteDto) {
     return this.pagesService.acceptInvite(body.token);
   }
 
@@ -36,7 +69,7 @@ export class NotionPagesController {
   }
 
   @Post()
-  createPage(@Body() createDto: any, @Req() req: Request) {
+  createPage(@Body() createDto: CreatePageDto, @Req() req: Request) {
     return this.pagesService.createPage(createDto, req.user);
   }
 
@@ -52,12 +85,12 @@ export class NotionPagesController {
   }
 
   @Post(':id/share-email')
-  shareEmail(@Param('id') id: string, @Body() body: any) {
+  shareEmail(@Param('id') id: string, @Body() body: ShareEmailDto) {
     return this.pagesService.shareEmail(id, body.email);
   }
 
   @Post(':id/clone')
-  cloneFormat(@Param('id') id: string, @Body() body: any) {
+  cloneFormat(@Param('id') id: string, @Body() body: CloneFormatDto) {
     return this.pagesService.cloneFormat(id, body.targetParentId);
   }
 

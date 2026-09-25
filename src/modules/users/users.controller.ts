@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   UseGuards,
+  Query,
 } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -37,12 +38,9 @@ export class UsersController {
     return await this.usersService.create(createUserDto);
   }
 
-  /**
-   * Get All Users
-   */
   @Get()
-  async findAll() {
-    return await this.usersService.findAll();
+  async findAll(@Query() query: any) {
+    return await this.usersService.findAll(query);
   }
 
   /**
