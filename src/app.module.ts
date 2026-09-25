@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -18,6 +19,9 @@ import { ApplicationsModule } from './modules/applications/applications.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { NotionPagesModule } from './modules/notion-pages/notion-pages.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { MailModule } from './modules/mail/mail.module';
+import { ChatModule } from './modules/chat/chat.module';
 
 @Module({
   imports: [
@@ -33,6 +37,8 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
         limit: 100,
       },
     ]),
+
+    ScheduleModule.forRoot(),
 
     MongooseModule.forRootAsync({
       inject: [ConfigService],
@@ -53,6 +59,9 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     AttendanceModule,
     NotionPagesModule,
     DashboardModule,
+    NotificationsModule,
+    MailModule,
+    ChatModule,
   ],
   controllers: [AppController],
   providers: [AppService],

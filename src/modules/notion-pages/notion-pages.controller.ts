@@ -20,9 +20,19 @@ export class NotionPagesController {
     return this.pagesService.acceptInvite(body.token);
   }
 
+  @Get('deleted')
+  getDeletedPages(@Req() req: Request) {
+    return this.pagesService.getDeletedPages(req.user);
+  }
+
   @Get(':id')
   getPageById(@Param('id') id: string, @Req() req: Request) {
     return this.pagesService.getPageById(id, req.user);
+  }
+
+  @Patch(':id/restore')
+  restorePage(@Param('id') id: string, @Req() req: Request) {
+    return this.pagesService.restorePage(id, req.user);
   }
 
   @Post()

@@ -5,6 +5,9 @@ import { NotionPage, NotionPageDocument } from './schemas/notion-page.schema';
 import { NotionLead, NotionLeadDocument } from './schemas/notion-lead.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { Team, TeamDocument } from '../teams/schemas/team.schema';
+import { NotificationsService } from '../notifications/notifications.service';
+import { MailService } from '../mail/mail.service';
+import { Cron } from '@nestjs/schedule';
 
 @Injectable()
 export class NotionPagesService {
@@ -13,6 +16,8 @@ export class NotionPagesService {
     @InjectModel(NotionLead.name) private readonly leadModel: Model<NotionLeadDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectModel(Team.name) private readonly teamModel: Model<TeamDocument>,
+    private readonly notificationsService: NotificationsService,
+    private readonly mailService: MailService,
   ) { }
 
   async createPage(createDto: any, user: any) {
@@ -25,9 +30,6 @@ export class NotionPagesService {
     }
 
     const role = user.role?.toUpperCase();
-    if (!['SUPER_ADMIN', 'ADMIN', 'MANAGER'].includes(role)) {
-      throw new ForbiddenException('Only managers and admins can create pages');
-    }
 
     if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
       if (assignedMemberId && assignedMemberId !== user._id.toString()) {
@@ -36,6 +38,13 @@ export class NotionPagesService {
           if (!assignedUser || assignedUser.teamId?.toString() !== user.teamId?.toString()) {
             throw new ForbiddenException('Can only assign to your team members');
           }
+        } else if (role === 'TEAM_LEADER') {
+          const assignedUser = await this.userModel.findById(assignedMemberId).lean();
+          if (!assignedUser || assignedUser.reportsTo?.toString() !== user._id.toString()) {
+            throw new ForbiddenException('Can only assign to your direct reports');
+          }
+        } else {
+          throw new ForbiddenException('You can only assign pages to yourself');
         }
       }
     }
@@ -59,7 +68,31 @@ export class NotionPagesService {
       createdBy: user._id,
       teamId: user.teamId,
     });
-    return page.save();
+    
+    const saved = await page.save();
+
+    if (assignedMemberId && assignedMemberId !== user._id.toString()) {
+      await this.notificationsService.createNotification({
+        recipient: assignedMemberId,
+        title: 'New Page Assigned',
+        message: `You have been assigned to the new page "${saved.title}" by ${user.firstName} ${user.lastName}.`,
+        type: 'PAGE_ASSIGNED',
+        relatedPageId: saved._id.toString(),
+      });
+
+      // Fetch assignee to get email
+      const assignee = await this.userModel.findById(assignedMemberId).lean();
+      if (assignee && assignee.email) {
+        this.mailService.sendPageAssignmentEmail(
+          assignee.email, 
+          `${assignee.firstName} ${assignee.lastName}`, 
+          saved.title, 
+          saved._id.toString()
+        ).catch(e => console.error("Mail error:", e));
+      }
+    }
+
+    return saved;
   }
 
   private async getRootAssignedMemberId(page: any): Promise<string | null> {
@@ -285,7 +318,11 @@ export class NotionPagesService {
       }
     }
 
-    const page = await this.pageModel.findById(id).lean();
+    const page = await this.pageModel.findById(id)
+      .populate('assignmentLogs.assignedTo', 'firstName lastName')
+      .populate('assignmentLogs.assignedBy', 'firstName lastName')
+      .populate('updateLogs.updatedBy', 'firstName lastName')
+      .lean();
     if (!page) throw new NotFoundException('Page not found');
 
     const hasAccess = await this.checkAccess(page, user);
@@ -335,7 +372,69 @@ export class NotionPagesService {
       }
     }
 
-    const updatedPage = await this.pageModel.findByIdAndUpdate(id, updateData, { new: true });
+    let pushUpdate: any = {};
+    const pushObj: any = {};
+
+    if (updateData.assignedMemberId && updateData.assignedMemberId !== page.assignedMemberId?.toString()) {
+      pushObj.assignmentLogs = {
+        assignedTo: new Types.ObjectId(updateData.assignedMemberId),
+        assignedBy: user._id,
+        assignedAt: new Date()
+      };
+    }
+
+    if (updateData.rows || updateData.columns) {
+      pushObj.updateLogs = {
+        updatedBy: user._id,
+        updatedAt: new Date(),
+        action: 'Updated sheet data'
+      };
+    } else if (updateData.content) {
+      pushObj.updateLogs = {
+        updatedBy: user._id,
+        updatedAt: new Date(),
+        action: 'Updated document content'
+      };
+    }
+
+    if (Object.keys(pushObj).length > 0) {
+      pushUpdate.$push = pushObj;
+    }
+
+    const updatedPage = await this.pageModel.findByIdAndUpdate(
+      id, 
+      { ...updateData, ...pushUpdate }, 
+      { new: true }
+    )
+    .populate('assignmentLogs.assignedTo', 'firstName lastName')
+    .populate('assignmentLogs.assignedBy', 'firstName lastName')
+    .populate('updateLogs.updatedBy', 'firstName lastName');
+
+    if (!updatedPage) {
+      throw new NotFoundException('Page not found');
+    }
+
+    if (updateData.assignedMemberId && updateData.assignedMemberId !== page.assignedMemberId?.toString()) {
+      await this.notificationsService.createNotification({
+        recipient: updateData.assignedMemberId,
+        title: 'New Page Assigned',
+        message: `You have been assigned to the page "${updatedPage.title}" by ${user.firstName} ${user.lastName}.`,
+        type: 'PAGE_ASSIGNED',
+        relatedPageId: id,
+      });
+
+      // Fetch assignee to get email
+      const assignee = await this.userModel.findById(updateData.assignedMemberId).lean();
+      if (assignee && assignee.email) {
+        this.mailService.sendPageAssignmentEmail(
+          assignee.email, 
+          `${assignee.firstName} ${assignee.lastName}`, 
+          updatedPage.title, 
+          id
+        ).catch(e => console.error("Mail error:", e));
+      }
+    }
+    
     return updatedPage;
   }
 
@@ -358,8 +457,59 @@ export class NotionPagesService {
     const page = await this.pageModel.findById(id).lean();
     if (!page) throw new NotFoundException('Page not found');
 
-    await this.pageModel.findByIdAndUpdate(id, { isDeleted: true });
+    await this.pageModel.findByIdAndUpdate(id, { 
+      isDeleted: true,
+      deletedBy: user._id || user.id,
+      deletedAt: new Date()
+    });
     return { success: true };
+  }
+
+  async getDeletedPages(user: any) {
+    const role = user.role?.toUpperCase();
+    if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
+      throw new ForbiddenException('Only admins can view deleted pages');
+    }
+    const fortyFiveDaysAgo = new Date();
+    fortyFiveDaysAgo.setDate(fortyFiveDaysAgo.getDate() - 45);
+
+    return this.pageModel.find({ 
+      isDeleted: true,
+      deletedAt: { $gte: fortyFiveDaysAgo }
+    })
+    .populate({
+      path: 'createdBy',
+      select: 'firstName lastName email teamId',
+      populate: { path: 'teamId', select: 'name' }
+    })
+    .populate('deletedBy', 'firstName lastName email')
+    .lean();
+  }
+
+  async restorePage(id: string, user: any) {
+    const role = user.role?.toUpperCase();
+    if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
+      throw new ForbiddenException('Only admins can restore pages');
+    }
+    const page = await this.pageModel.findById(id).lean();
+    if (!page) throw new NotFoundException('Page not found');
+    
+    await this.pageModel.findByIdAndUpdate(id, { 
+      $set: { isDeleted: false },
+      $unset: { deletedBy: 1, deletedAt: 1 }
+    });
+    return { success: true };
+  }
+
+  @Cron('0 0 * * *') // Run every day at midnight
+  async purgeExpiredTrash() {
+    const fortyFiveDaysAgo = new Date();
+    fortyFiveDaysAgo.setDate(fortyFiveDaysAgo.getDate() - 45);
+
+    await this.pageModel.deleteMany({
+      isDeleted: true,
+      deletedAt: { $lt: fortyFiveDaysAgo }
+    });
   }
 
   async clearPageData(id: string, user: any) {
@@ -385,15 +535,29 @@ export class NotionPagesService {
 
     const updatedPage = await this.pageModel.findByIdAndUpdate(
       id,
-      { columns: [], rows: [] },
+      { 
+        columns: [], 
+        rows: [],
+        $push: {
+          updateLogs: {
+            updatedBy: user._id,
+            updatedAt: new Date(),
+            action: 'Cleared sheet data'
+          }
+        }
+      },
       { new: true },
     );
     return updatedPage;
   }
 
   async shareEmail(pageId: string, email: string) {
-    // Mock sharing logic
-    return { success: true, message: 'Invite sent', token: 'mock_token_123', inviteLink: `https://crm.local/accept-access?token=mock_token_123` };
+    const token = 'mock_token_123_' + Date.now();
+    
+    // Dispatch real email using MailService
+    this.mailService.sendPageInviteEmail(email, token).catch(e => console.error("Invite Mail error:", e));
+    
+    return { success: true, message: 'Invite sent', token };
   }
 
   async acceptInvite(token: string) {

@@ -46,6 +46,12 @@ export class NotionPage {
   columns: any[];
 
   @Prop({
+    type: MongooseSchema.Types.Mixed,
+    default: null,
+  })
+  content: any;
+
+  @Prop({
     type: MongooseSchema.Types.ObjectId,
     ref: 'Team',
     default: null,
@@ -83,6 +89,39 @@ export class NotionPage {
     default: false,
   })
   isDeleted: boolean;
+
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+  })
+  deletedBy: MongooseSchema.Types.ObjectId;
+
+  @Prop({
+    type: Date,
+    default: null,
+  })
+  deletedAt: Date;
+
+  @Prop({
+    type: [{
+      assignedTo: { type: MongooseSchema.Types.ObjectId, ref: 'User' },
+      assignedBy: { type: MongooseSchema.Types.ObjectId, ref: 'User' },
+      assignedAt: { type: Date, default: Date.now }
+    }],
+    default: [],
+  })
+  assignmentLogs: any[];
+
+  @Prop({
+    type: [{
+      updatedBy: { type: MongooseSchema.Types.ObjectId, ref: 'User' },
+      updatedAt: { type: Date, default: Date.now },
+      action: { type: String }
+    }],
+    default: [],
+  })
+  updateLogs: any[];
 }
 
 export const NotionPageSchema = SchemaFactory.createForClass(NotionPage);

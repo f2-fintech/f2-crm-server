@@ -7,6 +7,9 @@ import { NotionLead, NotionLeadSchema } from './schemas/notion-lead.schema';
 import { UsersModule } from '../users/users.module';
 import { TeamsModule } from '../teams/teams.module';
 
+import { NotificationsModule } from '../notifications/notifications.module';
+import { MailModule } from '../mail/mail.module';
+
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -15,6 +18,8 @@ import { TeamsModule } from '../teams/teams.module';
     ]),
     UsersModule,
     TeamsModule,
+    NotificationsModule,
+    MailModule,
   ],
   controllers: [NotionPagesController],
   providers: [NotionPagesService],
