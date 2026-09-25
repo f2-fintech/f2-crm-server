@@ -20,7 +20,6 @@ import { UpdateUserDto } from './dto/update-user.dto';
 @ApiTags('Users')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'), RolesGuard)
-@Roles('SUPER_ADMIN', 'ADMIN')
 @Controller('users')
 export class UsersController {
   constructor(
@@ -30,6 +29,7 @@ export class UsersController {
   /**
    * Create User
    */
+  @Roles('SUPER_ADMIN', 'ADMIN')
   @Post()
   async create(
     @Body() createUserDto: CreateUserDto,
@@ -48,6 +48,7 @@ export class UsersController {
   /**
    * Get User By Id
    */
+  @Roles('SUPER_ADMIN', 'ADMIN')
   @Get(':id')
   async findOne(
     @Param('id') id: string,
@@ -58,6 +59,7 @@ export class UsersController {
   /**
    * Update User
    */
+  @Roles('SUPER_ADMIN', 'ADMIN')
   @Patch(':id')
   async update(
     @Param('id') id: string,
@@ -72,6 +74,7 @@ export class UsersController {
   /**
    * Delete User
    */
+  @Roles('SUPER_ADMIN', 'ADMIN')
   @Delete(':id')
   async remove(
     @Param('id') id: string,

@@ -16,4 +16,7 @@ export class UpdateNotionPageDto {
   @IsOptional()
   @IsString()
   assignedMemberId?: string;
+
+  @IsOptional()
+  content?: any;
 }
