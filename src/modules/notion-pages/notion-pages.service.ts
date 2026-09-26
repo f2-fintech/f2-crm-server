@@ -465,6 +465,73 @@ export class NotionPagesService {
     return { success: true };
   }
 
+  async getActivityLog(id: string, user: any) {
+    if (id.startsWith('user_') || !Types.ObjectId.isValid(id)) {
+      return { logs: [] };
+    }
+
+    const page = await this.pageModel.findById(id)
+      .populate('createdBy', 'firstName lastName email')
+      .populate('assignedMemberId', 'firstName lastName email')
+      .populate({
+        path: 'assignmentLogs.assignedTo',
+        select: 'firstName lastName email',
+      })
+      .populate({
+        path: 'assignmentLogs.assignedBy',
+        select: 'firstName lastName email',
+      })
+      .populate({
+        path: 'updateLogs.updatedBy',
+        select: 'firstName lastName email',
+      })
+      .lean();
+
+    if (!page) throw new NotFoundException('Page not found');
+
+    const hasAccess = await this.checkAccess(page, user);
+    if (!hasAccess) throw new ForbiddenException('Access denied');
+
+    // Build a unified timeline of events
+    const logs: any[] = [];
+
+    // Creation event
+    if (page.createdBy) {
+      logs.push({
+        type: 'CREATED',
+        action: 'Page created',
+        actor: page.createdBy,
+        timestamp: (page as any).createdAt || new Date(),
+      });
+    }
+
+    // Assignment logs
+    for (const al of (page.assignmentLogs || [])) {
+      logs.push({
+        type: 'ASSIGNED',
+        action: `Page assigned`,
+        actor: al.assignedBy,
+        target: al.assignedTo,
+        timestamp: al.assignedAt,
+      });
+    }
+
+    // Update logs
+    for (const ul of (page.updateLogs || [])) {
+      logs.push({
+        type: 'UPDATED',
+        action: ul.action || 'Page updated',
+        actor: ul.updatedBy,
+        timestamp: ul.updatedAt,
+      });
+    }
+
+    // Sort by timestamp descending (newest first)
+    logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+    return { logs, page: { _id: page._id, title: page.title } };
+  }
+
   async getDeletedPages(user: any) {
     const role = user.role?.toUpperCase();
     if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {

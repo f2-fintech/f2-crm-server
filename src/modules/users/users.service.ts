@@ -94,7 +94,8 @@ export class UsersService {
       .select('-password -refreshToken')
       .populate('roleId')
       .populate('branchId')
-      .populate('departmentId');
+      .populate('departmentId')
+      .populate('teamId');
 
     if (!user) {
       throw new NotFoundException('User not found');
@@ -156,6 +157,7 @@ export class UsersService {
         .populate('roleId')
         .populate('branchId')
         .populate('departmentId')
+        .populate('teamId')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(Number(limit))
@@ -180,7 +182,8 @@ export class UsersService {
       .select('-password -refreshToken')
       .populate('roleId')
       .populate('branchId')
-      .populate('departmentId');
+      .populate('departmentId')
+      .populate('teamId');
 
     if (!user) {
       throw new NotFoundException('User not found');
@@ -274,7 +277,8 @@ export class UsersService {
         .select('-password -refreshToken')
         .populate('roleId')
         .populate('branchId')
-        .populate('departmentId');
+        .populate('departmentId')
+        .populate('teamId');
 
     return updatedUser!;
   }

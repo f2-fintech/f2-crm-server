@@ -58,6 +58,11 @@ export class NotionPagesController {
     return this.pagesService.getDeletedPages(req.user);
   }
 
+  @Get(':id/activity-log')
+  getActivityLog(@Param('id') id: string, @Req() req: Request) {
+    return this.pagesService.getActivityLog(id, req.user);
+  }
+
   @Get(':id')
   getPageById(@Param('id') id: string, @Req() req: Request) {
     return this.pagesService.getPageById(id, req.user);
