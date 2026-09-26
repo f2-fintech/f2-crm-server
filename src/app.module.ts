@@ -22,6 +22,9 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { MailModule } from './modules/mail/mail.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { TodosModule } from './modules/todos/todos.module';
+import { LeadsModule } from './modules/leads/leads.module';
+import { TimelineModule } from './modules/timeline/timeline.module';
 
 @Module({
   imports: [
@@ -62,6 +65,9 @@ import { ChatModule } from './modules/chat/chat.module';
     NotificationsModule,
     MailModule,
     ChatModule,
+    TodosModule,
+    LeadsModule,
+    TimelineModule,
   ],
   controllers: [AppController],
   providers: [AppService],
