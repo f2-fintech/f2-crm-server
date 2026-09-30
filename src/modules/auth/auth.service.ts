@@ -278,4 +278,27 @@ export class AuthService {
       data: populatedUser,
     };
   }
+
+  /**
+   * Change Password (Internal)
+   */
+  async changePassword(userId: string, dto: any) {
+    if (!dto.currentPassword || !dto.newPassword) {
+      throw new BadRequestException('Current and new passwords are required');
+    }
+    const user = await this.userModel.findById(userId).select('+password');
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const isMatch = await bcrypt.compare(dto.currentPassword, user.password);
+    if (!isMatch) {
+      throw new BadRequestException('Incorrect current password');
+    }
+
+    user.password = await bcrypt.hash(dto.newPassword, 10);
+    await user.save();
+
+    return { message: 'Password changed successfully' };
+  }
 }

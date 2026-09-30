@@ -68,4 +68,12 @@ export class AuthController {
   updateProfile(@Req() req: any, @Body() dto: any) {
     return this.authService.updateProfile(req.user._id, dto);
   }
+
+  @Post('change-password')
+  @UseGuards(AuthGuard('jwt'))
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Change Password Internally' })
+  changePassword(@Req() req: any, @Body() dto: any) {
+    return this.authService.changePassword(req.user._id, dto);
+  }
 }
