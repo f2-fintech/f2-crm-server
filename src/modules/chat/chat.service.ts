@@ -35,4 +35,29 @@ export class ChatService {
     );
     return { success: true };
   }
+
+  async getChatSummary(userId: string) {
+    const id = new Types.ObjectId(userId);
+    const messages = await this.chatModel.find({
+      $or: [{ senderId: id }, { receiverId: id }]
+    }).sort({ createdAt: -1 }).lean();
+
+    const summary = {};
+    for (const msg of messages) {
+      const otherUser = msg.senderId.toString() === userId ? msg.receiverId.toString() : msg.senderId.toString();
+      if (!summary[otherUser]) {
+        summary[otherUser] = {
+          lastMessage: msg.text,
+          lastMessageAt: (msg as any).createdAt,
+          unreadCount: 0
+        };
+      }
+      if (msg.receiverId.toString() === userId && !msg.isRead) {
+        summary[otherUser].unreadCount++;
+      }
+    }
+    return summary;
+  }
 }
+
+

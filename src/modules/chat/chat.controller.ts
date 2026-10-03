@@ -13,6 +13,11 @@ export class ChatController {
     return await this.chatService.sendMessage(req.user._id, createDto);
   }
 
+  @Get('summary')
+  async getChatSummary(@Req() req: any) {
+    return await this.chatService.getChatSummary(req.user._id);
+  }
+
   @Get(':userId')
   async getConversation(@Param('userId') userId: string, @Req() req: any) {
     return await this.chatService.getConversation(req.user._id, userId);

@@ -11,6 +11,23 @@ export enum LeadStatus {
   CONVERTED = 'CONVERTED',
 }
 
+export enum KycStatus {
+  PENDING = 'PENDING',
+  VERIFIED = 'VERIFIED',
+  REJECTED = 'REJECTED',
+}
+
+class DocumentItem {
+  @Prop({ required: true })
+  type: string;
+
+  @Prop({ required: true })
+  url: string;
+
+  @Prop({ default: false })
+  verified: boolean;
+}
+
 @Schema({
   timestamps: true,
   collection: 'leads',
@@ -39,6 +56,21 @@ export class Lead {
 
   @Prop({ type: String, enum: LeadStatus, default: LeadStatus.NEW })
   status: LeadStatus;
+
+  @Prop({ type: String, enum: KycStatus, default: KycStatus.PENDING })
+  kycStatus: KycStatus;
+
+  @Prop({ default: 0 })
+  monthlyIncome: number;
+
+  @Prop({ default: '' })
+  leadSource: string;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  assignedTo: string;
+
+  @Prop({ type: [DocumentItem], default: [] })
+  documents: DocumentItem[];
 
   @Prop({ default: false })
   isDeleted: boolean;

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, Patch, Param } from '@nestjs/common';
 import { LeadsService } from './leads.service';
 import { CreateLeadDto } from './dto/create-lead.dto';
 
@@ -14,6 +14,16 @@ export class LeadsController {
   @Get()
   findAll(@Query() query: any) {
     return this.leadsService.findAll(query);
+  }
+
+  @Patch(':id/documents')
+  addDocument(@Param('id') id: string, @Body() body: { type: string, url: string }) {
+    return this.leadsService.addDocument(id, body);
+  }
+
+  @Post(':id/convert')
+  convertToCustomer(@Param('id') id: string) {
+    return this.leadsService.convertToCustomer(id);
   }
   @Get('dashboard/stats')
   getDashboardStats() {
