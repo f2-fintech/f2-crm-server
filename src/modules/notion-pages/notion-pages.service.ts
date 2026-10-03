@@ -127,9 +127,12 @@ export class NotionPagesService {
     }
 
     if (page.teamId) {
-      if (['MANAGER', 'TEAM_LEADER'].includes(role) && page.teamId.toString() === user.teamId?.toString()) {
-        return true;
+      const pageTeam = await this.teamModel.findById(page.teamId).lean();
+      if (pageTeam) {
+        if (pageTeam.managerId?.toString() === user._id.toString()) return true;
+        if (pageTeam.members?.some((m: any) => m.toString() === user._id.toString())) return true;
       }
+      if (page.teamId.toString() === user.teamId?.toString()) return true;
       if (page.createdBy?.toString() === user._id.toString()) return true;
       return false;
     }
@@ -139,7 +142,7 @@ export class NotionPagesService {
   }
 
   async getTree(user: any) {
-    const pages = await this.pageModel.find({ isDeleted: false }).lean();
+    const pages = await this.pageModel.find({ isDeleted: false }).select('-rows -content').lean();
 
     let allowedTeamIds: string[] = [];
     let allowedUserIds: string[] = [];
@@ -151,24 +154,66 @@ export class NotionPagesService {
       allowedTeamIds = activeTeams.map(t => t._id.toString());
       allowedUserIds = allUsers.map(u => u._id.toString());
     } else if (role === 'MANAGER') {
-      if (user.teamId) {
-        allowedTeamIds = [user.teamId.toString()];
-        const teamUsers = await this.userModel.find({ teamId: user.teamId, isActive: true }).lean();
-        allowedUserIds = teamUsers.map(u => u._id.toString());
+      const managedTeams = await this.teamModel.find({ 
+        isActive: true, 
+        $or: [{ managerId: user._id }, { members: user._id }] 
+      }).lean();
+      const managedTeamIds = managedTeams.map(t => t._id.toString());
+      
+      if (user.teamId && !managedTeamIds.includes(user.teamId.toString())) {
+        managedTeamIds.push(user.teamId.toString());
+      }
+      allowedTeamIds = managedTeamIds;
+
+      if (allowedTeamIds.length > 0) {
+        const teamUsers = await this.userModel.find({ teamId: { $in: allowedTeamIds }, isActive: true }).lean();
+        allowedUserIds = [...new Set([...teamUsers.map(u => u._id.toString()), user._id.toString()])];
       } else {
         allowedUserIds = [user._id.toString()];
       }
     } else if (role === 'TEAM_LEADER') {
-      if (user.teamId) allowedTeamIds = [user.teamId.toString()];
+      const leaderTeams = await this.teamModel.find({ 
+        isActive: true, 
+        members: user._id 
+      }).lean();
+      const leaderTeamIds = leaderTeams.map(t => t._id.toString());
+      
+      if (user.teamId && !leaderTeamIds.includes(user.teamId.toString())) {
+        leaderTeamIds.push(user.teamId.toString());
+      }
+      allowedTeamIds = leaderTeamIds;
+      
       const reports = await this.userModel.find({ reportsTo: user._id, isActive: true }).lean();
       allowedUserIds = [user._id.toString(), ...reports.map(r => r._id.toString())];
     } else {
-      if (user.teamId) allowedTeamIds = [user.teamId.toString()];
+      const memberTeams = await this.teamModel.find({ 
+        isActive: true, 
+        members: user._id 
+      }).lean();
+      const memberTeamIds = memberTeams.map(t => t._id.toString());
+      
+      if (user.teamId && !memberTeamIds.includes(user.teamId.toString())) {
+        memberTeamIds.push(user.teamId.toString());
+      }
+      allowedTeamIds = memberTeamIds;
+      
       allowedUserIds = [user._id.toString()];
     }
 
-    const activeTeams = await this.teamModel.find({ isActive: true, ...(allowedTeamIds.length > 0 ? { _id: { $in: allowedTeamIds } } : {}) }).lean();
-    const allUsers = await this.userModel.find({ isActive: true, ...(allowedUserIds.length > 0 ? { _id: { $in: allowedUserIds } } : {}) }).lean();
+    let activeTeams: any[] = [];
+    let allUsers: any[] = [];
+
+    if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
+      activeTeams = await this.teamModel.find({ isActive: true }).lean();
+      allUsers = await this.userModel.find({ isActive: true }).lean();
+    } else {
+      if (allowedTeamIds.length > 0) {
+        activeTeams = await this.teamModel.find({ isActive: true, _id: { $in: allowedTeamIds } }).lean();
+      }
+      if (allowedUserIds.length > 0) {
+        allUsers = await this.userModel.find({ isActive: true, _id: { $in: allowedUserIds } }).lean();
+      }
+    }
 
     const teamFolders = activeTeams.map(team => {
       const teamIdStr = team._id.toString();
@@ -211,15 +256,27 @@ export class NotionPagesService {
   
   private async buildTeamRootNode(team: any, user: any, role: string) {
     const teamIdStr = team._id.toString();
-    const pages = await this.pageModel.find({ isDeleted: false }).lean();
+    const pages = await this.pageModel.find({ isDeleted: false }).select('-rows -content').lean();
     
     let allowedUserIds: string[] = [];
     if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
       const allUsers = await this.userModel.find({ isActive: true }).lean();
       allowedUserIds = allUsers.map(u => u._id.toString());
     } else if (role === 'MANAGER') {
-      const teamUsers = await this.userModel.find({ teamId: user.teamId, isActive: true }).lean();
-      allowedUserIds = teamUsers.map(u => u._id.toString());
+      const managedTeams = await this.teamModel.find({ 
+        isActive: true, 
+        $or: [{ managerId: user._id }, { members: user._id }] 
+      }).lean();
+      const managedTeamIds = managedTeams.map(t => t._id.toString());
+      if (user.teamId && !managedTeamIds.includes(user.teamId.toString())) {
+        managedTeamIds.push(user.teamId.toString());
+      }
+      if (managedTeamIds.length > 0) {
+        const teamUsers = await this.userModel.find({ teamId: { $in: managedTeamIds }, isActive: true }).lean();
+        allowedUserIds = [...new Set([...teamUsers.map(u => u._id.toString()), user._id.toString()])];
+      } else {
+        allowedUserIds = [user._id.toString()];
+      }
     } else if (role === 'TEAM_LEADER') {
       const reports = await this.userModel.find({ reportsTo: user._id, isActive: true }).lean();
       allowedUserIds = [user._id.toString(), ...reports.map(r => r._id.toString())];
@@ -262,7 +319,7 @@ export class NotionPagesService {
   }
 
   async getPageById(id: string, user: any) {
-    const pages = await this.pageModel.find({ isDeleted: false }).lean();
+    const pages = await this.pageModel.find({ isDeleted: false }).select('-rows -content').lean();
     const role = user.role?.toUpperCase();
 
     if (id.startsWith('user_')) {
@@ -308,9 +365,12 @@ export class NotionPagesService {
       const team = await this.teamModel.findById(id).lean();
       if (team) {
         if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
-          const isMyTeam = user.teamId?.toString() === id;
-          const canManageTeam = ['MANAGER', 'TEAM_LEADER'].includes(role) && isMyTeam;
-          if (!isMyTeam && !canManageTeam) {
+          const isMyTeam = 
+            user.teamId?.toString() === id || 
+            team.managerId?.toString() === user._id.toString() || 
+            team.members?.some((m: any) => m.toString() === user._id.toString());
+            
+          if (!isMyTeam) {
             throw new ForbiddenException('Not allowed to view this team folder');
           }
         }
@@ -647,5 +707,96 @@ export class NotionPagesService {
     });
 
     return clone.save();
+  }
+
+  async getAllRemarks(user: any) {
+    const role = user.role?.toUpperCase();
+    if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
+      throw new ForbiddenException('Only admins can view unified remarks');
+    }
+
+    const pages = await this.pageModel.find({ 
+      isDeleted: false,
+      pageType: 'SHEET'
+    })
+    .populate('teamId', 'name')
+    .populate('assignedMemberId', 'firstName lastName')
+    .lean();
+
+    return pages.map(page => {
+      const teamName = (page.teamId as any)?.name || 'Unassigned';
+      const assignedTo = (page.assignedMemberId as any)
+        ? `${(page.assignedMemberId as any).firstName} ${(page.assignedMemberId as any).lastName}`
+        : 'Unassigned';
+
+      // Build a column key → column name map (col_0 → "Name", col_1 → "Mobile", etc.)
+      const colMap: Record<string, string> = {};
+      if (Array.isArray(page.columns)) {
+        page.columns.forEach((col: any) => {
+          if (col.key && col.name) {
+            colMap[col.key] = col.name;
+          }
+        });
+      }
+
+      // Identify which columns contain remarks/feedback
+      const remarkKeys = Object.entries(colMap)
+        .filter(([, name]) => {
+          const n = name.toLowerCase();
+          return n.includes('remark') || n.includes('feedback') || n.includes('comment') || n.includes('note');
+        })
+        .map(([key]) => key);
+
+      // Also look for raw keys that look like feedback fields even without column map
+      const allRowKeys = new Set<string>();
+      (page.rows || []).forEach((row: any) => {
+        Object.keys(row).forEach(k => {
+          if (k !== 'id') allRowKeys.add(k);
+        });
+      });
+      allRowKeys.forEach(k => {
+        const kl = k.toLowerCase();
+        if (kl.includes('remark') || kl.includes('feedback') || kl.includes('comment') || kl.includes('note')) {
+          if (!remarkKeys.includes(k)) remarkKeys.push(k);
+        }
+      });
+
+      // Map rows to human-readable objects
+      const mappedRows = (page.rows || []).map((row: any) => {
+        const readable: Record<string, any> = { _rowId: row.id };
+        Object.entries(row).forEach(([key, value]) => {
+          if (key === 'id') return;
+          const humanKey = colMap[key] || key; // fallback to raw key if no mapping
+          readable[humanKey] = value;
+        });
+        return readable;
+      });
+
+      // Compute movement stats for this page
+      let remarksFilled = 0;
+      let remarksEmpty = 0;
+      const remarkKeyNames = remarkKeys.map(k => colMap[k] || k);
+
+      mappedRows.forEach((row: any) => {
+        const hasRemark = remarkKeyNames.some(k => row[k] && String(row[k]).trim() !== '');
+        if (hasRemark) remarksFilled++;
+        else remarksEmpty++;
+      });
+
+      return {
+        _id: page._id,
+        title: page.title,
+        teamName,
+        assignedTo,
+        createdAt: (page as any).createdAt,
+        columns: page.columns || [],
+        columnNames: Object.values(colMap),
+        remarkColumnNames: remarkKeyNames,
+        totalRows: mappedRows.length,
+        remarksFilled,
+        remarksEmpty,
+        rows: mappedRows
+      };
+    }).filter(p => p.totalRows > 0); // Only return pages that have data
   }
 }

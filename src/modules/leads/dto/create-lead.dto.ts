@@ -24,4 +24,16 @@ export class CreateLeadDto {
   @IsNumber()
   @IsOptional()
   loanAmount?: number;
+
+  @IsNumber()
+  @IsOptional()
+  monthlyIncome?: number;
+
+  @IsString()
+  @IsOptional()
+  leadSource?: string;
+
+  @IsString()
+  @IsOptional()
+  assignedTo?: string;
 }

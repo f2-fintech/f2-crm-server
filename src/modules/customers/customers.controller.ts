@@ -42,6 +42,25 @@ export class CustomersController {
     return this.customersService.findAll(query);
   }
 
+  @Get('dashboard/stats')
+  getDashboardStats() {
+    return this.customersService.getDashboardStats();
+  }
+
+  @Get('lead/:leadId')
+  getCustomerByLeadId(
+    @Param('leadId') leadId: string,
+  ) {
+    return this.customersService.getCustomerByLeadId(leadId);
+  }
+
+  @Get('application/:applicationId')
+  getCustomerByApplicationId(
+    @Param('applicationId') applicationId: string,
+  ) {
+    return this.customersService.getCustomerByApplicationId(applicationId);
+  }
+
   @Get(':id')
   @ApiOperation({
     summary: 'Get Customer By Id',
@@ -81,28 +100,9 @@ export class CustomersController {
     return this.customersService.remove(id);
   }
 
-  @Get('dashboard/stats')
-  getDashboardStats() {
-    return this.customersService.getDashboardStats();
-  }
 
-  @Get('lead/:leadId')
-  getCustomerByLeadId(
-    @Param('leadId') leadId: string,
-  ) {
-    return this.customersService.getCustomerByLeadId(
-      leadId,
-    );
-  }
 
-  @Get('application/:applicationId')
-  getCustomerByApplicationId(
-    @Param('applicationId') applicationId: string,
-  ) {
-    return this.customersService.getCustomerByApplicationId(
-      applicationId,
-    );
-  }
+
 
   @Patch(':id/restore')
   restoreCustomer(@Param('id') id: string) {

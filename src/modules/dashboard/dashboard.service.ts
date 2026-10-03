@@ -31,9 +31,12 @@ export class DashboardService {
         this.pageModel.countDocuments({ teamId, isDeleted: false }),
       ]);
 
-      // Calculate total leads by aggregating the length of rows array in pages belonging to the team
-      const pages = await this.pageModel.find({ teamId, isDeleted: false }).select('rows').lean();
-      const totalLeads = pages.reduce((sum, page) => sum + (Array.isArray(page.rows) ? page.rows.length : 0), 0);
+      const aggregateResult = await this.pageModel.aggregate([
+        { $match: { teamId, isDeleted: false } },
+        { $project: { rowCount: { $size: { $ifNull: ["$rows", []] } } } },
+        { $group: { _id: null, total: { $sum: "$rowCount" } } }
+      ]);
+      const totalLeads = aggregateResult[0]?.total || 0;
 
       const recentUsers = await this.userModel
         .find({ teamId })
@@ -42,54 +45,75 @@ export class DashboardService {
         .select('firstName lastName email profileImage createdAt')
         .exec();
 
+      const allPages = await this.pageModel.find({ teamId, isDeleted: false }).select('rows').lean();
+      const pipeline: Record<string, number> = { 'New Leads': 0, 'Document Verification': 0, 'Underwriting / Credit': 0, 'Approved / Disbursed': 0 };
+      allPages.forEach(page => {
+        if (!page.rows) return;
+        page.rows.forEach((row: any) => {
+          const s = (row.status || row.Status || 'New Leads').toString().trim().toLowerCase();
+          if (s.includes('doc') || s.includes('verif')) pipeline['Document Verification']++;
+          else if (s.includes('underwrit') || s.includes('credit') || s.includes('process')) pipeline['Underwriting / Credit']++;
+          else if (s.includes('approv') || s.includes('disburs')) pipeline['Approved / Disbursed']++;
+          else pipeline['New Leads']++;
+        });
+      });
+      const pipelineData = [
+        { stage: "New Leads", count: pipeline['New Leads'] },
+        { stage: "Document Verification", count: pipeline['Document Verification'] },
+        { stage: "Underwriting / Credit", count: pipeline['Underwriting / Credit'] },
+        { stage: "Approved / Disbursed", count: pipeline['Approved / Disbursed'] }
+      ];
+
       return {
         success: true,
         data: {
           roleType: role,
-          stats: {
-            teamSize,
-            activeMembers,
-            teamPages,
-            totalLeads,
-          },
+          stats: { teamSize, activeMembers, teamPages, totalLeads },
           recentActivity: recentUsers.map((u: any) => ({
-            _id: u._id,
-            title: `New team member: ${u.firstName} ${u.lastName}`,
-            description: u.email,
-            createdAt: u.createdAt,
-            type: 'USER',
+            _id: u._id, title: `New team member: ${u.firstName} ${u.lastName}`, description: u.email, createdAt: u.createdAt, type: 'USER'
           })),
-          monthlyLeads: {
-            data: [
-              { name: 'Jan', value: 10 },
-              { name: 'Feb', value: 15 },
-              { name: 'Mar', value: 20 },
-              { name: 'Apr', value: 25 },
-              { name: 'May', value: 35 },
-              { name: 'Jun', value: 45 },
-            ],
-          },
+          pipelineData,
+          monthlyLeads: { data: [{ name: 'Jan', value: 10 }, { name: 'Feb', value: 15 }, { name: 'Mar', value: 20 }, { name: 'Apr', value: 25 }, { name: 'May', value: 35 }, { name: 'Jun', value: 45 }] },
         },
       };
     }
 
     if (['EMPLOYEE', 'SOURCER', 'CHANNEL_PARTNER'].includes(role)) {
       const assignedPages = await this.pageModel.countDocuments({ assignedMemberId: user.id || user._id, isDeleted: false });
-      const pages = await this.pageModel.find({ assignedMemberId: user.id || user._id, isDeleted: false }).select('rows').lean();
-      const myLeads = pages.reduce((sum, page) => sum + (Array.isArray(page.rows) ? page.rows.length : 0), 0);
+      const aggregateResult = await this.pageModel.aggregate([
+        { $match: { assignedMemberId: user.id || user._id, isDeleted: false } },
+        { $project: { rowCount: { $size: { $ifNull: ["$rows", []] } } } },
+        { $group: { _id: null, total: { $sum: "$rowCount" } } }
+      ]);
+      const myLeads = aggregateResult[0]?.total || 0;
+
+      const allPages = await this.pageModel.find({ assignedMemberId: user.id || user._id, isDeleted: false }).select('rows').lean();
+      const pipeline: Record<string, number> = { 'New Leads': 0, 'Document Verification': 0, 'Underwriting / Credit': 0, 'Approved / Disbursed': 0 };
+      allPages.forEach(page => {
+        if (!page.rows) return;
+        page.rows.forEach((row: any) => {
+          const s = (row.status || row.Status || 'New Leads').toString().trim().toLowerCase();
+          if (s.includes('doc') || s.includes('verif')) pipeline['Document Verification']++;
+          else if (s.includes('underwrit') || s.includes('credit') || s.includes('process')) pipeline['Underwriting / Credit']++;
+          else if (s.includes('approv') || s.includes('disburs')) pipeline['Approved / Disbursed']++;
+          else pipeline['New Leads']++;
+        });
+      });
+      const pipelineData = [
+        { stage: "New Leads", count: pipeline['New Leads'] },
+        { stage: "Document Verification", count: pipeline['Document Verification'] },
+        { stage: "Underwriting / Credit", count: pipeline['Underwriting / Credit'] },
+        { stage: "Approved / Disbursed", count: pipeline['Approved / Disbursed'] }
+      ];
 
       return {
         success: true,
         data: {
           roleType: role,
-          stats: {
-            assignedPages,
-            myLeads,
-          },
+          stats: { assignedPages, myLeads },
           recentActivity: [],
-          monthlyLeads: {
-            data: [],
-          },
+          pipelineData,
+          monthlyLeads: { data: [] },
         },
       };
     }
@@ -102,6 +126,7 @@ export class DashboardService {
       totalBranches,
       totalDepartments,
       totalRoles,
+      allPages,
     ] = await Promise.all([
       this.userModel.countDocuments(),
       this.userModel.countDocuments({ isActive: true }),
@@ -109,7 +134,39 @@ export class DashboardService {
       this.branchModel.countDocuments({ isActive: true }),
       this.departmentModel.countDocuments({ isActive: true }),
       this.roleModel.countDocuments({ isActive: true }),
+      this.pageModel.find({ isDeleted: false }).select('rows').lean(),
     ]);
+
+    const pipeline: Record<string, number> = {
+      'New Leads': 0,
+      'Document Verification': 0,
+      'Underwriting / Credit': 0,
+      'Approved / Disbursed': 0,
+    };
+
+    allPages.forEach(page => {
+      if (!page.rows) return;
+      page.rows.forEach((row: any) => {
+        const s = (row.status || row.Status || 'New Leads').toString().trim();
+        // Just map common strings or default to 'New Leads'
+        if (s.toLowerCase().includes('doc') || s.toLowerCase().includes('verif')) {
+          pipeline['Document Verification']++;
+        } else if (s.toLowerCase().includes('underwrit') || s.toLowerCase().includes('credit') || s.toLowerCase().includes('process')) {
+          pipeline['Underwriting / Credit']++;
+        } else if (s.toLowerCase().includes('approv') || s.toLowerCase().includes('disburs')) {
+          pipeline['Approved / Disbursed']++;
+        } else {
+          pipeline['New Leads']++;
+        }
+      });
+    });
+
+    const pipelineData = [
+      { stage: "New Leads", count: pipeline['New Leads'] },
+      { stage: "Document Verification", count: pipeline['Document Verification'] },
+      { stage: "Underwriting / Credit", count: pipeline['Underwriting / Credit'] },
+      { stage: "Approved / Disbursed", count: pipeline['Approved / Disbursed'] },
+    ];
 
     const recentUsers = await this.userModel
       .find()
@@ -137,6 +194,7 @@ export class DashboardService {
           createdAt: u.createdAt,
           type: 'USER',
         })),
+        pipelineData,
         monthlyLeads: {
           data: [
             { name: 'Jan', value: 30 },
