@@ -142,7 +142,7 @@ export class NotionPagesService {
   }
 
   async getTree(user: any) {
-    const pages = await this.pageModel.find({ isDeleted: false }).select('-rows -content').lean();
+    const pages = await this.pageModel.find({ isDeleted: false, parentPageId: null }).select('-rows -content').lean();
 
     const pagesByAssignedMember = new Map();
     const genericPagesByTeam = new Map();
@@ -266,7 +266,6 @@ export class NotionPagesService {
       shared: teamFolders,
       private: pages.filter(p => p.section === 'PRIVATE' && p.createdBy?.toString() === user._id.toString()),
       workspace: pages.filter(p => p.section === 'WORKSPACE' && (['SUPER_ADMIN', 'ADMIN'].includes(role) || p.createdBy?.toString() === user._id.toString())),
-      tree: pages
     };
   }
 
@@ -729,18 +728,40 @@ export class NotionPagesService {
       throw new ForbiddenException('Only admins can view unified remarks');
     }
 
-    const pages = await this.pageModel.find({ 
-      isDeleted: false,
-      pageType: 'SHEET'
-    })
-    .populate('teamId', 'name')
-    .populate('assignedMemberId', 'firstName lastName')
-    .lean();
+    const pages = await this.pageModel.aggregate([
+      { $match: { isDeleted: false, pageType: 'SHEET' } },
+      {
+        $lookup: {
+          from: 'teams',
+          localField: 'teamId',
+          foreignField: '_id',
+          as: 'team'
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'assignedMemberId',
+          foreignField: '_id',
+          as: 'assignedMember'
+        }
+      },
+      {
+        $project: {
+          title: 1,
+          columns: 1,
+          rows: 1,
+          createdAt: 1,
+          teamId: { $arrayElemAt: ['$team', 0] },
+          assignedMemberId: { $arrayElemAt: ['$assignedMember', 0] }
+        }
+      }
+    ]);
 
     return pages.map(page => {
-      const teamName = (page.teamId as any)?.name || 'Unassigned';
-      const assignedTo = (page.assignedMemberId as any)
-        ? `${(page.assignedMemberId as any).firstName} ${(page.assignedMemberId as any).lastName}`
+      const teamName = page.teamId?.name || 'Unassigned';
+      const assignedTo = page.assignedMemberId
+        ? `${page.assignedMemberId.firstName} ${page.assignedMemberId.lastName}`
         : 'Unassigned';
 
       // Build a column key → column name map (col_0 → "Name", col_1 → "Mobile", etc.)

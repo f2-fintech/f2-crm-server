@@ -125,3 +125,9 @@ export class NotionPage {
 }
 
 export const NotionPageSchema = SchemaFactory.createForClass(NotionPage);
+
+// Indexes for performance optimization
+NotionPageSchema.index({ isDeleted: 1, parentPageId: 1 });
+NotionPageSchema.index({ isDeleted: 1, pageType: 1 });
+NotionPageSchema.index({ assignedMemberId: 1, isDeleted: 1, parentPageId: 1 });
+NotionPageSchema.index({ teamId: 1, isDeleted: 1 });
