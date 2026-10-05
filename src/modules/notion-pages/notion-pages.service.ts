@@ -144,6 +144,23 @@ export class NotionPagesService {
   async getTree(user: any) {
     const pages = await this.pageModel.find({ isDeleted: false }).select('-rows -content').lean();
 
+    const pagesByAssignedMember = new Map();
+    const genericPagesByTeam = new Map();
+
+    pages.forEach(p => {
+      if (!p.parentPageId) {
+        if (p.assignedMemberId) {
+          const uid = p.assignedMemberId.toString();
+          if (!pagesByAssignedMember.has(uid)) pagesByAssignedMember.set(uid, []);
+          pagesByAssignedMember.get(uid).push(p);
+        } else if (p.teamId) {
+          const tid = p.teamId.toString();
+          if (!genericPagesByTeam.has(tid)) genericPagesByTeam.set(tid, []);
+          genericPagesByTeam.get(tid).push(p);
+        }
+      }
+    });
+
     let allowedTeamIds: string[] = [];
     let allowedUserIds: string[] = [];
     const role = user.role?.toUpperCase();
@@ -227,12 +244,12 @@ export class NotionPagesService {
           title: `${u.firstName} ${u.lastName} (${u.role === 'MANAGER' ? 'Manager' : 'Member'})`,
           pageType: 'PAGE',
           section: 'SHARED',
-          children: pages.filter(p => p.assignedMemberId?.toString() === userIdStr && !p.parentPageId)
+          children: pagesByAssignedMember.get(userIdStr) || []
         };
       });
 
       const genericPages = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEAM_LEADER'].includes(role)
-        ? pages.filter(p => p.teamId?.toString() === teamIdStr && !p.parentPageId && !p.assignedMemberId)
+        ? (genericPagesByTeam.get(teamIdStr) || [])
         : [];
 
       return {
@@ -256,7 +273,7 @@ export class NotionPagesService {
   
   private async buildTeamRootNode(team: any, user: any, role: string) {
     const teamIdStr = team._id.toString();
-    const pages = await this.pageModel.find({ isDeleted: false }).select('-rows -content').lean();
+    const teamPages = await this.pageModel.find({ teamId: team._id, isDeleted: false, parentPageId: null }).select('-rows -content').lean();
     
     let allowedUserIds: string[] = [];
     if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
@@ -298,19 +315,19 @@ export class NotionPagesService {
         title: `${u.firstName} ${u.lastName} (${u.role === 'MANAGER' ? 'Manager' : 'Member'})`,
         pageType: 'PAGE',
         section: 'SHARED',
-        children: pages.filter(p => p.assignedMemberId?.toString() === userIdStr && !p.parentPageId)
+        children: teamPages.filter(p => p.assignedMemberId?.toString() === userIdStr)
       };
     });
 
     const genericPages = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEAM_LEADER'].includes(role)
-      ? pages.filter(p => p.teamId?.toString() === teamIdStr && !p.parentPageId && !p.assignedMemberId)
+      ? teamPages.filter(p => !p.assignedMemberId)
       : [];
 
     return {
       _id: teamIdStr,
       id: teamIdStr,
       title: team.name,
-      pageType: 'PAGE', // synthetic folder node, not a real sheet/page — no rows/columns of its own
+      pageType: 'PAGE',
       section: 'SHARED',
       rows: [],
       columns: [],
@@ -319,7 +336,6 @@ export class NotionPagesService {
   }
 
   async getPageById(id: string, user: any) {
-    const pages = await this.pageModel.find({ isDeleted: false }).select('-rows -content').lean();
     const role = user.role?.toUpperCase();
 
     if (id.startsWith('user_')) {
@@ -346,21 +362,20 @@ export class NotionPagesService {
       const targetUser = await this.userModel.findById(userId).lean();
       if (!targetUser) throw new NotFoundException('User not found');
 
+      const userPages = await this.pageModel.find({ assignedMemberId: userId as any, parentPageId: null, isDeleted: false }).select('-rows -content').lean();
+
       return {
         _id: id,
         id: id,
         title: `${targetUser.firstName} ${targetUser.lastName}-`,
-        pageType: 'PAGE', // Empty page that just holds child sheets
+        pageType: 'PAGE',
         section: 'SHARED',
         rows: [],
         columns: [],
-        children: pages.filter(p => p.assignedMemberId?.toString() === userId && !p.parentPageId)
+        children: userPages
       };
     }
 
-    // Team root folder (its id is a Team _id, not a NotionPage _id — see getTree()).
-    // Without this branch, selecting/auto-selecting a team root 404s against the
-    // pages collection since no such Page document exists.
     if (Types.ObjectId.isValid(id)) {
       const team = await this.teamModel.findById(id).lean();
       if (team) {
@@ -388,8 +403,7 @@ export class NotionPagesService {
     const hasAccess = await this.checkAccess(page, user);
     if (!hasAccess) throw new ForbiddenException('You do not have access to this page');
 
-    // Attach child pages for normal pages too
-    const children = pages.filter(p => p.parentPageId?.toString() === id);
+    const children = await this.pageModel.find({ parentPageId: id as any, isDeleted: false }).select('-rows -content').lean();
     return { ...page, children };
   }
 
@@ -777,10 +791,15 @@ export class NotionPagesService {
       let remarksEmpty = 0;
       const remarkKeyNames = remarkKeys.map(k => colMap[k] || k);
 
-      mappedRows.forEach((row: any) => {
+      const rowsWithRemarks = mappedRows.filter((row: any) => {
         const hasRemark = remarkKeyNames.some(k => row[k] && String(row[k]).trim() !== '');
-        if (hasRemark) remarksFilled++;
-        else remarksEmpty++;
+        if (hasRemark) {
+          remarksFilled++;
+          return true;
+        } else {
+          remarksEmpty++;
+          return false;
+        }
       });
 
       return {
@@ -795,7 +814,7 @@ export class NotionPagesService {
         totalRows: mappedRows.length,
         remarksFilled,
         remarksEmpty,
-        rows: mappedRows
+        rows: rowsWithRemarks
       };
     }).filter(p => p.totalRows > 0); // Only return pages that have data
   }

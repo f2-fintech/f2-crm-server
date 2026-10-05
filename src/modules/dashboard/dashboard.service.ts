@@ -45,17 +45,19 @@ export class DashboardService {
         .select('firstName lastName email profileImage createdAt')
         .exec();
 
-      const allPages = await this.pageModel.find({ teamId, isDeleted: false }).select('rows').lean();
       const pipeline: Record<string, number> = { 'New Leads': 0, 'Document Verification': 0, 'Underwriting / Credit': 0, 'Approved / Disbursed': 0 };
-      allPages.forEach(page => {
-        if (!page.rows) return;
-        page.rows.forEach((row: any) => {
-          const s = (row.status || row.Status || 'New Leads').toString().trim().toLowerCase();
-          if (s.includes('doc') || s.includes('verif')) pipeline['Document Verification']++;
-          else if (s.includes('underwrit') || s.includes('credit') || s.includes('process')) pipeline['Underwriting / Credit']++;
-          else if (s.includes('approv') || s.includes('disburs')) pipeline['Approved / Disbursed']++;
-          else pipeline['New Leads']++;
-        });
+      const statusCounts = await this.pageModel.aggregate([
+        { $match: { teamId, isDeleted: false } },
+        { $unwind: "$rows" },
+        { $project: { status: { $toLower: { $trim: { input: { $toString: { $ifNull: ["$rows.status", { $ifNull: ["$rows.Status", "New Leads"] }] } } } } } } },
+        { $group: { _id: "$status", count: { $sum: 1 } } }
+      ]);
+      statusCounts.forEach(({ _id: s, count }) => {
+        if (!s) s = 'new leads';
+        if (s.includes('doc') || s.includes('verif')) pipeline['Document Verification'] += count;
+        else if (s.includes('underwrit') || s.includes('credit') || s.includes('process')) pipeline['Underwriting / Credit'] += count;
+        else if (s.includes('approv') || s.includes('disburs')) pipeline['Approved / Disbursed'] += count;
+        else pipeline['New Leads'] += count;
       });
       const pipelineData = [
         { stage: "New Leads", count: pipeline['New Leads'] },
@@ -87,17 +89,19 @@ export class DashboardService {
       ]);
       const myLeads = aggregateResult[0]?.total || 0;
 
-      const allPages = await this.pageModel.find({ assignedMemberId: user.id || user._id, isDeleted: false }).select('rows').lean();
       const pipeline: Record<string, number> = { 'New Leads': 0, 'Document Verification': 0, 'Underwriting / Credit': 0, 'Approved / Disbursed': 0 };
-      allPages.forEach(page => {
-        if (!page.rows) return;
-        page.rows.forEach((row: any) => {
-          const s = (row.status || row.Status || 'New Leads').toString().trim().toLowerCase();
-          if (s.includes('doc') || s.includes('verif')) pipeline['Document Verification']++;
-          else if (s.includes('underwrit') || s.includes('credit') || s.includes('process')) pipeline['Underwriting / Credit']++;
-          else if (s.includes('approv') || s.includes('disburs')) pipeline['Approved / Disbursed']++;
-          else pipeline['New Leads']++;
-        });
+      const statusCounts = await this.pageModel.aggregate([
+        { $match: { assignedMemberId: user.id || user._id, isDeleted: false } },
+        { $unwind: "$rows" },
+        { $project: { status: { $toLower: { $trim: { input: { $toString: { $ifNull: ["$rows.status", { $ifNull: ["$rows.Status", "New Leads"] }] } } } } } } },
+        { $group: { _id: "$status", count: { $sum: 1 } } }
+      ]);
+      statusCounts.forEach(({ _id: s, count }) => {
+        if (!s) s = 'new leads';
+        if (s.includes('doc') || s.includes('verif')) pipeline['Document Verification'] += count;
+        else if (s.includes('underwrit') || s.includes('credit') || s.includes('process')) pipeline['Underwriting / Credit'] += count;
+        else if (s.includes('approv') || s.includes('disburs')) pipeline['Approved / Disbursed'] += count;
+        else pipeline['New Leads'] += count;
       });
       const pipelineData = [
         { stage: "New Leads", count: pipeline['New Leads'] },
@@ -126,7 +130,6 @@ export class DashboardService {
       totalBranches,
       totalDepartments,
       totalRoles,
-      allPages,
     ] = await Promise.all([
       this.userModel.countDocuments(),
       this.userModel.countDocuments({ isActive: true }),
@@ -134,7 +137,6 @@ export class DashboardService {
       this.branchModel.countDocuments({ isActive: true }),
       this.departmentModel.countDocuments({ isActive: true }),
       this.roleModel.countDocuments({ isActive: true }),
-      this.pageModel.find({ isDeleted: false }).select('rows').lean(),
     ]);
 
     const pipeline: Record<string, number> = {
@@ -144,21 +146,24 @@ export class DashboardService {
       'Approved / Disbursed': 0,
     };
 
-    allPages.forEach(page => {
-      if (!page.rows) return;
-      page.rows.forEach((row: any) => {
-        const s = (row.status || row.Status || 'New Leads').toString().trim();
-        // Just map common strings or default to 'New Leads'
-        if (s.toLowerCase().includes('doc') || s.toLowerCase().includes('verif')) {
-          pipeline['Document Verification']++;
-        } else if (s.toLowerCase().includes('underwrit') || s.toLowerCase().includes('credit') || s.toLowerCase().includes('process')) {
-          pipeline['Underwriting / Credit']++;
-        } else if (s.toLowerCase().includes('approv') || s.toLowerCase().includes('disburs')) {
-          pipeline['Approved / Disbursed']++;
-        } else {
-          pipeline['New Leads']++;
-        }
-      });
+    const statusCounts = await this.pageModel.aggregate([
+      { $match: { isDeleted: false } },
+      { $unwind: "$rows" },
+      { $project: { status: { $toLower: { $trim: { input: { $toString: { $ifNull: ["$rows.status", { $ifNull: ["$rows.Status", "New Leads"] }] } } } } } } },
+      { $group: { _id: "$status", count: { $sum: 1 } } }
+    ]);
+
+    statusCounts.forEach(({ _id: s, count }) => {
+      if (!s) s = 'new leads';
+      if (s.includes('doc') || s.includes('verif')) {
+        pipeline['Document Verification'] += count;
+      } else if (s.includes('underwrit') || s.includes('credit') || s.includes('process')) {
+        pipeline['Underwriting / Credit'] += count;
+      } else if (s.includes('approv') || s.includes('disburs')) {
+        pipeline['Approved / Disbursed'] += count;
+      } else {
+        pipeline['New Leads'] += count;
+      }
     });
 
     const pipelineData = [
