@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { NotionPage, NotionPageDocument } from './schemas/notion-page.schema';
@@ -10,7 +10,7 @@ import { MailService } from '../mail/mail.service';
 import { Cron } from '@nestjs/schedule';
 
 @Injectable()
-export class NotionPagesService {
+export class NotionPagesService implements OnModuleInit {
   constructor(
     @InjectModel(NotionPage.name) private readonly pageModel: Model<NotionPageDocument>,
     @InjectModel(NotionLead.name) private readonly leadModel: Model<NotionLeadDocument>,
@@ -19,6 +19,19 @@ export class NotionPagesService {
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
   ) { }
+
+  async onModuleInit() {
+    try {
+      console.log('Building NotionPage indexes for performance...');
+      await this.pageModel.collection.createIndex({ isDeleted: 1, parentPageId: 1 }, { background: true });
+      await this.pageModel.collection.createIndex({ isDeleted: 1, pageType: 1 }, { background: true });
+      await this.pageModel.collection.createIndex({ assignedMemberId: 1, isDeleted: 1, parentPageId: 1 }, { background: true });
+      await this.pageModel.collection.createIndex({ teamId: 1, isDeleted: 1 }, { background: true });
+      console.log('NotionPage indexes verified.');
+    } catch (error) {
+      console.error('Error building indexes:', error);
+    }
+  }
 
   async createPage(createDto: any, user: any) {
     let parentPageId = createDto.parentId;
@@ -801,8 +814,10 @@ export class NotionPagesService {
 
       // Filter FIRST to avoid allocating millions of objects for empty rows
       const rowsWithRemarksRaw = (page.rows || []).filter((row: any) => {
-        const hasRemark = remarkKeys.some(k => row[k] && String(row[k]).trim() !== '');
-        if (hasRemark) {
+        const hasRemarkText = remarkKeys.some(k => row[k] && String(row[k]).trim() !== '');
+        const hasDisposition = row.disposition && String(row.disposition).trim() !== '';
+        
+        if (hasRemarkText || hasDisposition) {
           remarksFilled++;
           return true;
         } else {
@@ -816,6 +831,14 @@ export class NotionPagesService {
         const readable: Record<string, any> = { _rowId: row.id };
         Object.entries(row).forEach(([key, value]) => {
           if (key === 'id') return;
+          if (key === 'disposition') {
+            readable.disposition = value;
+            return;
+          }
+          if (key === 'feedback_notes') {
+            readable.feedback_notes = value;
+            return;
+          }
           const humanKey = colMap[key] || key; // fallback to raw key if no mapping
           readable[humanKey] = value;
         });
