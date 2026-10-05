@@ -796,24 +796,12 @@ export class NotionPagesService {
         }
       });
 
-      // Map rows to human-readable objects
-      const mappedRows = (page.rows || []).map((row: any) => {
-        const readable: Record<string, any> = { _rowId: row.id };
-        Object.entries(row).forEach(([key, value]) => {
-          if (key === 'id') return;
-          const humanKey = colMap[key] || key; // fallback to raw key if no mapping
-          readable[humanKey] = value;
-        });
-        return readable;
-      });
-
-      // Compute movement stats for this page
       let remarksFilled = 0;
       let remarksEmpty = 0;
-      const remarkKeyNames = remarkKeys.map(k => colMap[k] || k);
 
-      const rowsWithRemarks = mappedRows.filter((row: any) => {
-        const hasRemark = remarkKeyNames.some(k => row[k] && String(row[k]).trim() !== '');
+      // Filter FIRST to avoid allocating millions of objects for empty rows
+      const rowsWithRemarksRaw = (page.rows || []).filter((row: any) => {
+        const hasRemark = remarkKeys.some(k => row[k] && String(row[k]).trim() !== '');
         if (hasRemark) {
           remarksFilled++;
           return true;
@@ -821,6 +809,17 @@ export class NotionPagesService {
           remarksEmpty++;
           return false;
         }
+      });
+
+      // Map ONLY the rows that have remarks to human-readable objects
+      const mappedRows = rowsWithRemarksRaw.map((row: any) => {
+        const readable: Record<string, any> = { _rowId: row.id };
+        Object.entries(row).forEach(([key, value]) => {
+          if (key === 'id') return;
+          const humanKey = colMap[key] || key; // fallback to raw key if no mapping
+          readable[humanKey] = value;
+        });
+        return readable;
       });
 
       return {
@@ -831,11 +830,11 @@ export class NotionPagesService {
         createdAt: (page as any).createdAt,
         columns: page.columns || [],
         columnNames: Object.values(colMap),
-        remarkColumnNames: remarkKeyNames,
-        totalRows: mappedRows.length,
+        remarkColumnNames: remarkKeys.map(k => colMap[k] || k),
+        totalRows: (page.rows || []).length,
         remarksFilled,
         remarksEmpty,
-        rows: rowsWithRemarks
+        rows: mappedRows
       };
     }).filter(p => p.totalRows > 0); // Only return pages that have data
   }
