@@ -6,6 +6,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Lead, LeadDocument, LeadStatus } from './schemas/lead.schema';
+import { Insight } from '../../common/interfaces/insight.interface';
 import { CreateLeadDto } from './dto/create-lead.dto';
 import {
   Timeline,
@@ -175,5 +176,97 @@ export class LeadsService {
     });
 
     return savedCustomer;
+  }
+
+  async getDashboardStats(): Promise<any> {
+    const [totalLeads, convertedLeads, rejectedLeads, activeLeads, newLeads] = await Promise.all([
+      this.leadModel.countDocuments({ isDeleted: false }),
+      this.leadModel.countDocuments({ isDeleted: false, status: LeadStatus.CONVERTED }),
+      this.leadModel.countDocuments({ isDeleted: false, status: LeadStatus.LOST }),
+      this.leadModel.countDocuments({ 
+        isDeleted: false, 
+        status: { $nin: [LeadStatus.CONVERTED, LeadStatus.LOST] } 
+      }),
+      this.leadModel.countDocuments({ isDeleted: false, status: LeadStatus.NEW })
+    ]);
+
+    // Source distribution
+    const sourceStats = await this.leadModel.aggregate([
+      { $match: { isDeleted: false } },
+      { $group: { _id: '$leadSource', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 3 }
+    ]);
+
+    // Active aging > 14 days
+    const twoWeeksAgo = new Date();
+    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
+    
+    const inactiveLeads = await this.leadModel.countDocuments({
+      isDeleted: false,
+      status: { $nin: [LeadStatus.CONVERTED, LeadStatus.LOST] },
+      updatedAt: { $lt: twoWeeksAgo }
+    });
+
+    const insights: Insight[] = [];
+    
+    if (inactiveLeads > 0) {
+      insights.push({
+        title: "Idle Leads",
+        metric: inactiveLeads,
+        explanation: "No recent activity is recorded for these leads.",
+        severity: "info",
+        action: { label: "View Idle", href: "/leads?status=active" }
+      });
+    }
+
+    if (newLeads > 0) {
+      insights.push({
+        title: "New Leads",
+        metric: newLeads,
+        explanation: "Leads that have just entered the system.",
+        severity: "info"
+      });
+    }
+
+    if (sourceStats.length > 0) {
+      const topSource = sourceStats[0];
+      insights.push({
+        title: "Top Lead Source",
+        metric: topSource._id || "Unknown",
+        explanation: `Highest volume source with ${topSource.count} leads generated.`,
+        severity: "info"
+      });
+    }
+
+    let conversionRate = 0;
+    if (totalLeads > 0) {
+      conversionRate = Math.round((convertedLeads / totalLeads) * 100);
+      if (conversionRate > 0) {
+        insights.push({
+          title: "Conversion Rate",
+          metric: `${conversionRate}%`,
+          explanation: `Overall lead to customer conversion rate.`,
+          severity: "info"
+        });
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        overview: {
+          totalLeads,
+          approvedLeads: convertedLeads,
+          rejectedLeads,
+          followUpLeads: activeLeads,
+        },
+        performance: {
+          todayLeads: newLeads,
+          conversionRate,
+        },
+        insights
+      },
+    };
   }
 }

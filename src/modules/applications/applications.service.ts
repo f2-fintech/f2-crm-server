@@ -11,6 +11,7 @@ import {
   ApplicationDocument,
   ApplicationStatus,
 } from './schemas/application.schema';
+import { Insight } from '../../common/interfaces/insight.interface';
 
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { UpdateApplicationDto } from './dto/update-application.dto';
@@ -407,6 +408,46 @@ export class ApplicationsService {
       }),
     ]);
 
+    const insights: Insight[] = [];
+
+    const pending = draftApplications + submittedApplications;
+    if (pending > 0) {
+      insights.push({
+        title: "Pending Applications",
+        metric: pending,
+        explanation: "Applications waiting for review or submission.",
+        severity: "info"
+      });
+    }
+
+    if (underReviewApplications > 0) {
+      insights.push({
+        title: "Under Review",
+        metric: underReviewApplications,
+        explanation: "Applications currently in underwriting.",
+        severity: "info"
+      });
+    }
+
+    if (rejectedApplications > 0 && totalApplications > 0) {
+      const rejectRate = Math.round((rejectedApplications / totalApplications) * 100);
+      insights.push({
+        title: "Rejection Rate",
+        metric: `${rejectRate}%`,
+        explanation: "Percentage of applications that were rejected.",
+        severity: "info"
+      });
+    }
+
+    if (disbursedApplications > 0) {
+      insights.push({
+        title: "Disbursed",
+        metric: disbursedApplications,
+        explanation: "Successfully disbursed applications.",
+        severity: "success"
+      });
+    }
+
     return {
       success: true,
       data: {
@@ -417,6 +458,7 @@ export class ApplicationsService {
         approvedApplications,
         rejectedApplications,
         disbursedApplications,
+        insights
       },
     };
   }

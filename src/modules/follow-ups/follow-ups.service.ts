@@ -11,6 +11,7 @@ import {
   FollowUpDocument,
   FollowUpStatus,
 } from './schemas/follow-up.schema';
+import { Insight } from '../../common/interfaces/insight.interface';
 
 import { CreateFollowUpDto } from './dto/create-follow-up.dto';
 import { UpdateFollowUpDto } from './dto/update-follow-up.dto';
@@ -411,6 +412,37 @@ export class FollowUpsService {
       }),
     ]);
 
+    const insights: Insight[] = [];
+
+    if (missedFollowUps > 0) {
+      insights.push({
+        title: "Overdue Follow-ups",
+        metric: missedFollowUps,
+        explanation: "Tasks that have missed their scheduled deadline.",
+        severity: "info"
+      });
+    }
+
+    if (pendingFollowUps > 0) {
+      insights.push({
+        title: "Pending Tasks",
+        metric: pendingFollowUps,
+        explanation: "Upcoming follow-up tasks that need attention.",
+        severity: "info"
+      });
+    }
+
+    const totalAttempted = completedFollowUps + missedFollowUps + cancelledFollowUps;
+    if (totalAttempted > 0) {
+      const successRate = Math.round((completedFollowUps / totalAttempted) * 100);
+      insights.push({
+        title: "Contact Success Rate",
+        metric: `${successRate}%`,
+        explanation: "Percentage of follow-ups successfully completed vs missed/cancelled.",
+        severity: "info"
+      });
+    }
+
     return {
       success: true,
       data: {
@@ -420,6 +452,7 @@ export class FollowUpsService {
         missedFollowUps,
         rescheduledFollowUps,
         cancelledFollowUps,
+        insights
       },
     };
   }

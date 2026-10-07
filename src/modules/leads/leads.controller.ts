@@ -38,20 +38,6 @@ export class LeadsController {
   }
   @Get('dashboard/stats')
   getDashboardStats() {
-    return {
-      success: true,
-      data: {
-        overview: {
-          totalLeads: 0,
-          approvedLeads: 0,
-          rejectedLeads: 0,
-          followUpLeads: 0,
-        },
-        performance: {
-          todayLeads: 0,
-          conversionRate: 0,
-        },
-      },
-    };
+    return this.leadsService.getDashboardStats();
   }
 }

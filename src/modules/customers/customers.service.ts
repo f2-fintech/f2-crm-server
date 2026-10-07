@@ -11,6 +11,7 @@ import {
   CustomerStatus,
   CustomerDocument,
 } from './schemas/customer.schema';
+import { Insight } from '../../common/interfaces/insight.interface';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { CustomerQueryDto } from './dto/customer-query.dto';
@@ -356,6 +357,37 @@ export class CustomersService {
       }),
     ]);
 
+    const insights: Insight[] = [];
+
+    if (activeCustomers > 0) {
+      insights.push({
+        title: "Active Customers",
+        metric: activeCustomers,
+        explanation: "Customers currently active or onboarding.",
+        severity: "info"
+      });
+    }
+
+    if (inactiveCustomers > 0) {
+      insights.push({
+        title: "Inactive Customers",
+        metric: inactiveCustomers,
+        explanation: "Customers with inactive status.",
+        severity: "info",
+        action: { label: "View Inactive", href: "/customers?status=inactive" }
+      });
+    }
+
+    if (closedCustomers > 0 && totalCustomers > 0) {
+      const churnRate = Math.round((closedCustomers / totalCustomers) * 100);
+      insights.push({
+        title: "Closed Rate",
+        metric: `${churnRate}%`,
+        explanation: "Percentage of customers with closed status.",
+        severity: "info"
+      });
+    }
+
     return {
       success: true,
       data: {
@@ -363,6 +395,7 @@ export class CustomersService {
         activeCustomers,
         inactiveCustomers,
         closedCustomers,
+        insights
       },
     };
   }
