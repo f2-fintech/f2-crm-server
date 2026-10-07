@@ -1,4 +1,12 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+} from '@nestjs/common';
 import { AiInsightsService } from './ai-insights.service';
 import { CreateAiInsightDto } from './dto/create-ai-insight.dto';
 import { UpdateAiInsightDto } from './dto/update-ai-insight.dto';
@@ -23,7 +31,10 @@ export class AiInsightsController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateAiInsightDto: UpdateAiInsightDto) {
+  update(
+    @Param('id') id: string,
+    @Body() updateAiInsightDto: UpdateAiInsightDto,
+  ) {
     return this.aiInsightsService.update(+id, updateAiInsightDto);
   }
 

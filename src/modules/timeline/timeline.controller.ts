@@ -1,18 +1,11 @@
-import {
-  Controller,
-  Get,
-  Param,
-  Query,
-} from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 
 import { TimelineService } from './timeline.service';
 import { TimelineQueryDto } from './dto/timeline-query.dto';
 
 @Controller('timeline')
 export class TimelineController {
-  constructor(
-    private readonly timelineService: TimelineService,
-  ) {}
+  constructor(private readonly timelineService: TimelineService) {}
 
   /**
    * Get All Timeline
@@ -33,9 +26,7 @@ export class TimelineController {
     @Param('leadId')
     leadId: string,
   ) {
-    return this.timelineService.getLeadTimeline(
-      leadId,
-    );
+    return this.timelineService.getLeadTimeline(leadId);
   }
 
   /**
@@ -46,9 +37,7 @@ export class TimelineController {
     @Param('customerId')
     customerId: string,
   ) {
-    return this.timelineService.getCustomerTimeline(
-      customerId,
-    );
+    return this.timelineService.getCustomerTimeline(customerId);
   }
 
   /**
@@ -59,9 +48,7 @@ export class TimelineController {
     @Param('applicationId')
     applicationId: string,
   ) {
-    return this.timelineService.getApplicationTimeline(
-      applicationId,
-    );
+    return this.timelineService.getApplicationTimeline(applicationId);
   }
 
   /**

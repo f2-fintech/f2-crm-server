@@ -3,10 +3,8 @@ import { MongooseModule } from '@nestjs/mongoose';
 
 import { ApplicationsController } from './applications.controller';
 import { ApplicationsService } from './applications.service';
-import {
-  Application,
-  ApplicationSchema,
-} from './schemas/application.schema';
+import { Application, ApplicationSchema } from './schemas/application.schema';
+import { LifecycleEventsModule } from '../lifecycle-events/lifecycle-events.module';
 
 @Module({
   imports: [
@@ -16,6 +14,7 @@ import {
         schema: ApplicationSchema,
       },
     ]),
+    LifecycleEventsModule,
   ],
   controllers: [ApplicationsController],
   providers: [ApplicationsService],

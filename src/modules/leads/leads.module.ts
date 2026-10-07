@@ -5,6 +5,7 @@ import { LeadsService } from './leads.service';
 import { Lead, LeadSchema } from './schemas/lead.schema';
 import { Timeline, TimelineSchema } from '../timeline/schemas/timeline.schemas';
 import { Customer, CustomerSchema } from '../customers/schemas/customer.schema';
+import { LifecycleEventsModule } from '../lifecycle-events/lifecycle-events.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { Customer, CustomerSchema } from '../customers/schemas/customer.schema';
       { name: Timeline.name, schema: TimelineSchema },
       { name: Customer.name, schema: CustomerSchema },
     ]),
+    LifecycleEventsModule,
   ],
   controllers: [LeadsController],
   providers: [LeadsService],

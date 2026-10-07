@@ -20,11 +20,19 @@ export class TodosService {
   }
 
   async findAll(userId: string): Promise<Todo[]> {
-    return this.todoModel.find({ userId: new Types.ObjectId(userId) } as any).sort({ createdAt: -1 }).exec();
+    return this.todoModel
+      .find({ userId: new Types.ObjectId(userId) } as any)
+      .sort({ createdAt: -1 })
+      .exec();
   }
 
   async findOne(userId: string, id: string): Promise<Todo> {
-    const todo = await this.todoModel.findOne({ _id: new Types.ObjectId(id), userId: new Types.ObjectId(userId) } as any).exec();
+    const todo = await this.todoModel
+      .findOne({
+        _id: new Types.ObjectId(id),
+        userId: new Types.ObjectId(userId),
+      } as any)
+      .exec();
     if (!todo) {
       throw new NotFoundException(`Todo #${id} not found`);
     }
@@ -38,26 +46,32 @@ export class TodosService {
   ): Promise<Todo> {
     const existingTodo = await this.todoModel
       .findOneAndUpdate(
-        { _id: new Types.ObjectId(id), userId: new Types.ObjectId(userId) } as any,
+        {
+          _id: new Types.ObjectId(id),
+          userId: new Types.ObjectId(userId),
+        } as any,
         updateTodoDto,
-        { new: true }
+        { new: true },
       )
       .exec();
 
     if (!existingTodo) {
       throw new NotFoundException(`Todo #${id} not found`);
     }
-    return existingTodo as unknown as Todo;
+    return existingTodo;
   }
 
   async remove(userId: string, id: string): Promise<Todo> {
     const deletedTodo = await this.todoModel
-      .findOneAndDelete({ _id: new Types.ObjectId(id), userId: new Types.ObjectId(userId) } as any)
+      .findOneAndDelete({
+        _id: new Types.ObjectId(id),
+        userId: new Types.ObjectId(userId),
+      } as any)
       .exec();
 
     if (!deletedTodo) {
       throw new NotFoundException(`Todo #${id} not found`);
     }
-    return deletedTodo as unknown as Todo;
+    return deletedTodo;
   }
 }

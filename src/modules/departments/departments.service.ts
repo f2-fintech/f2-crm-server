@@ -8,33 +8,26 @@ import { Model } from 'mongoose';
 
 import { CreateDepartmentDto } from './dto/create-department.dto';
 import { UpdateDepartmentDto } from './dto/update-department.dto';
-import {
-  Department,
-  DepartmentDocument,
-} from './schemas/department.schema';
+import { Department, DepartmentDocument } from './schemas/department.schema';
 
 @Injectable()
 export class DepartmentsService {
   constructor(
     @InjectModel(Department.name)
     private readonly departmentModel: Model<DepartmentDocument>,
-  ) { }
+  ) {}
 
   /**
    * Create Department
    */
-  async create(
-    createDepartmentDto: CreateDepartmentDto,
-  ): Promise<Department> {
+  async create(createDepartmentDto: CreateDepartmentDto): Promise<Department> {
     // Check Department Code
     const existingCode = await this.departmentModel.findOne({
       departmentCode: createDepartmentDto.departmentCode.toUpperCase(),
     });
 
     if (existingCode) {
-      throw new ConflictException(
-        'Department code already exists',
-      );
+      throw new ConflictException('Department code already exists');
     }
 
     // Check Department Name
@@ -43,15 +36,12 @@ export class DepartmentsService {
     });
 
     if (existingName) {
-      throw new ConflictException(
-        'Department name already exists',
-      );
+      throw new ConflictException('Department name already exists');
     }
 
     const department = await this.departmentModel.create({
       ...createDepartmentDto,
-      departmentCode:
-        createDepartmentDto.departmentCode.toUpperCase(),
+      departmentCode: createDepartmentDto.departmentCode.toUpperCase(),
     });
 
     return department;
@@ -72,13 +62,12 @@ export class DepartmentsService {
    * Get Department By Id
    */
   async findOne(id: string): Promise<Department> {
-    const department =
-      await this.departmentModel.findById(id).populate('headOfDepartment', 'firstName lastName email profileImage');
+    const department = await this.departmentModel
+      .findById(id)
+      .populate('headOfDepartment', 'firstName lastName email profileImage');
 
     if (!department) {
-      throw new NotFoundException(
-        'Department not found',
-      );
+      throw new NotFoundException('Department not found');
     }
 
     return department;
@@ -91,28 +80,21 @@ export class DepartmentsService {
     id: string,
     updateDepartmentDto: UpdateDepartmentDto,
   ): Promise<Department> {
-    const department =
-      await this.departmentModel.findById(id);
+    const department = await this.departmentModel.findById(id);
 
     if (!department) {
-      throw new NotFoundException(
-        'Department not found',
-      );
+      throw new NotFoundException('Department not found');
     }
 
     // Check Department Code
     if (updateDepartmentDto.departmentCode) {
-      const existingCode =
-        await this.departmentModel.findOne({
-          departmentCode:
-            updateDepartmentDto.departmentCode.toUpperCase(),
-          _id: { $ne: id },
-        });
+      const existingCode = await this.departmentModel.findOne({
+        departmentCode: updateDepartmentDto.departmentCode.toUpperCase(),
+        _id: { $ne: id },
+      });
 
       if (existingCode) {
-        throw new ConflictException(
-          'Department code already exists',
-        );
+        throw new ConflictException('Department code already exists');
       }
 
       updateDepartmentDto.departmentCode =
@@ -121,29 +103,22 @@ export class DepartmentsService {
 
     // Check Department Name
     if (updateDepartmentDto.departmentName) {
-      const existingName =
-        await this.departmentModel.findOne({
-          departmentName:
-            updateDepartmentDto.departmentName,
-          _id: { $ne: id },
-        });
+      const existingName = await this.departmentModel.findOne({
+        departmentName: updateDepartmentDto.departmentName,
+        _id: { $ne: id },
+      });
 
       if (existingName) {
-        throw new ConflictException(
-          'Department name already exists',
-        );
+        throw new ConflictException('Department name already exists');
       }
     }
 
-    const updatedDepartment =
-      await this.departmentModel.findByIdAndUpdate(
-        id,
-        updateDepartmentDto,
-        {
-          new: true,
-          runValidators: true,
-        },
-      ).populate('headOfDepartment', 'firstName lastName email profileImage');
+    const updatedDepartment = await this.departmentModel
+      .findByIdAndUpdate(id, updateDepartmentDto, {
+        new: true,
+        runValidators: true,
+      })
+      .populate('headOfDepartment', 'firstName lastName email profileImage');
 
     return updatedDepartment!;
   }
@@ -151,16 +126,11 @@ export class DepartmentsService {
   /**
    * Delete Department
    */
-  async remove(
-    id: string,
-  ): Promise<{ message: string }> {
-    const department =
-      await this.departmentModel.findById(id);
+  async remove(id: string): Promise<{ message: string }> {
+    const department = await this.departmentModel.findById(id);
 
     if (!department) {
-      throw new NotFoundException(
-        'Department not found',
-      );
+      throw new NotFoundException('Department not found');
     }
 
     await this.departmentModel.findByIdAndDelete(id);

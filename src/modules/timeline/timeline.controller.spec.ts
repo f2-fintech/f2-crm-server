@@ -8,7 +8,7 @@ describe('TimelineController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [TimelineController],
-      providers: [TimelineService],
+      providers: [{ provide: TimelineService, useValue: {} }]
     }).compile();
 
     controller = module.get<TimelineController>(TimelineController);

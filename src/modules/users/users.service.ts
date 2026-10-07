@@ -12,10 +12,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
 import { Role, RoleDocument } from '../roles/schemas/role.schema';
-import {
-  Branch,
-  BranchDocument,
-} from '../branches/schemas/branch.schema';
+import { Branch, BranchDocument } from '../branches/schemas/branch.schema';
 
 @Injectable()
 export class UsersService {
@@ -28,7 +25,7 @@ export class UsersService {
 
     @InjectModel(Branch.name)
     private readonly branchModel: Model<BranchDocument>,
-  ) { }
+  ) {}
 
   /**
    * Create User
@@ -54,18 +51,14 @@ export class UsersService {
       }
     }
     // Validate Role
-    const role = await this.roleModel.findById(
-      createUserDto.roleId,
-    );
+    const role = await this.roleModel.findById(createUserDto.roleId);
 
     if (!role) {
       throw new NotFoundException('Role not found');
     }
 
     if (createUserDto.branchId) {
-      const branch = await this.branchModel.findById(
-        createUserDto.branchId,
-      );
+      const branch = await this.branchModel.findById(createUserDto.branchId);
 
       if (!branch) {
         throw new NotFoundException('Branch not found');
@@ -76,10 +69,7 @@ export class UsersService {
     const employeeId = await this.generateEmployeeId();
 
     // Hash Password
-    const hashedPassword = await bcrypt.hash(
-      createUserDto.password,
-      10,
-    );
+    const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
 
     const createdUser = await this.userModel.create({
       ...createUserDto,
@@ -102,7 +92,6 @@ export class UsersService {
     }
 
     return user;
-
   }
 
   /**
@@ -130,7 +119,15 @@ export class UsersService {
    * Get All Users
    */
   async findAll(query: any = {}): Promise<any> {
-    const { search, roleId, branchId, departmentId, isActive, page = 1, limit = 10 } = query;
+    const {
+      search,
+      roleId,
+      branchId,
+      departmentId,
+      isActive,
+      page = 1,
+      limit = 10,
+    } = query;
     const filter: any = {};
 
     if (search) {
@@ -195,10 +192,7 @@ export class UsersService {
   /**
    * Update User
    */
-  async update(
-    id: string,
-    updateUserDto: UpdateUserDto,
-  ): Promise<User> {
+  async update(id: string, updateUserDto: UpdateUserDto): Promise<User> {
     const user = await this.userModel.findById(id);
 
     if (!user) {
@@ -216,8 +210,7 @@ export class UsersService {
         throw new ConflictException('Email already exists');
       }
 
-      updateUserDto.email =
-        updateUserDto.email.toLowerCase();
+      updateUserDto.email = updateUserDto.email.toLowerCase();
     }
 
     // Check Phone
@@ -234,23 +227,19 @@ export class UsersService {
 
     // Validate Role
     if (updateUserDto.roleId) {
-      const role = await this.roleModel.findById(
-        updateUserDto.roleId,
-      );
+      const role = await this.roleModel.findById(updateUserDto.roleId);
 
       if (!role) {
         throw new NotFoundException('Role not found');
       }
-      
+
       // Update the string role field as well
       (updateUserDto as any).role = role.name;
     }
 
     // Validate Branch
     if (updateUserDto.branchId) {
-      const branch = await this.branchModel.findById(
-        updateUserDto.branchId,
-      );
+      const branch = await this.branchModel.findById(updateUserDto.branchId);
 
       if (!branch) {
         throw new NotFoundException('Branch not found');
@@ -259,36 +248,27 @@ export class UsersService {
 
     // Hash Password if changed
     if (updateUserDto.password) {
-      updateUserDto.password = await bcrypt.hash(
-        updateUserDto.password,
-        10,
-      );
+      updateUserDto.password = await bcrypt.hash(updateUserDto.password, 10);
     }
 
-    const updatedUser =
-      await this.userModel.findByIdAndUpdate(
-        id,
-        updateUserDto,
-        {
-          new: true,
-          runValidators: true,
-        },
-      )
-        .select('-password -refreshToken')
-        .populate('roleId')
-        .populate('branchId')
-        .populate('departmentId')
-        .populate('teamId');
+    const updatedUser = await this.userModel
+      .findByIdAndUpdate(id, updateUserDto, {
+        new: true,
+        runValidators: true,
+      })
+      .select('-password -refreshToken')
+      .populate('roleId')
+      .populate('branchId')
+      .populate('departmentId')
+      .populate('teamId');
 
     return updatedUser!;
   }
 
   /**
- * Delete User
- */
-  async remove(
-    id: string,
-  ): Promise<{ message: string }> {
+   * Delete User
+   */
+  async remove(id: string): Promise<{ message: string }> {
     const user = await this.userModel.findById(id);
 
     if (!user) {

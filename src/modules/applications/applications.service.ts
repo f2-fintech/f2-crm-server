@@ -15,12 +15,18 @@ import {
 import { CreateApplicationDto } from './dto/create-application.dto';
 import { UpdateApplicationDto } from './dto/update-application.dto';
 import { ApplicationQueryDto } from './dto/application-query.dto';
+import { LifecycleEventsService } from '../lifecycle-events/lifecycle-events.service';
+import {
+  LifecycleEventType,
+  LifecycleEventSource,
+} from '../lifecycle-events/enums/lifecycle.enum';
 
 @Injectable()
 export class ApplicationsService {
   constructor(
     @InjectModel(Application.name)
     private readonly applicationModel: Model<ApplicationDocument>,
+    private readonly lifecycleEventsService: LifecycleEventsService,
   ) {}
 
   /**
@@ -48,19 +54,15 @@ export class ApplicationsService {
   /**
    * Create Application
    */
-  async create(
-    createApplicationDto: CreateApplicationDto,
-  ) {
-    const applicationId =
-      await this.generateApplicationId();
+  async create(createApplicationDto: CreateApplicationDto) {
+    const applicationId = await this.generateApplicationId();
 
     // Prevent duplicate application against same Lead
     if (createApplicationDto.leadId) {
-      const leadExists =
-        await this.applicationModel.findOne({
-          leadId: createApplicationDto.leadId,
-          isDeleted: false,
-        });
+      const leadExists = await this.applicationModel.findOne({
+        leadId: createApplicationDto.leadId,
+        isDeleted: false,
+      });
 
       if (leadExists) {
         throw new ConflictException(
@@ -76,14 +78,25 @@ export class ApplicationsService {
 
     await application.save();
 
+    await this.lifecycleEventsService.transitionStage({
+      entityType: 'Application',
+      entityId: application._id.toString(),
+      applicationId: application._id.toString(),
+      leadId: application.leadId,
+      customerId: application.customerId,
+      eventType: LifecycleEventType.APPLICATION_CREATED,
+      toStage: ApplicationStatus.DRAFT, // based on schema default
+      source: LifecycleEventSource.CRM,
+    });
+
     return {
       success: true,
       message: 'Application created successfully.',
       data: application,
     };
   }
-  
-    /**
+
+  /**
    * Get All Applications
    */
   async findAll(query: ApplicationQueryDto) {
@@ -148,18 +161,9 @@ export class ApplicationsService {
     const [applications, total] = await Promise.all([
       this.applicationModel
         .find(filter)
-        .populate(
-          'assignedTo',
-          'firstName lastName employeeId',
-        )
-        .populate(
-          'createdBy',
-          'firstName lastName employeeId',
-        )
-        .populate(
-          'updatedBy',
-          'firstName lastName employeeId',
-        )
+        .populate('assignedTo', 'firstName lastName employeeId')
+        .populate('createdBy', 'firstName lastName employeeId')
+        .populate('updatedBy', 'firstName lastName employeeId')
         .sort({
           [sortBy]: sortOrder === 'asc' ? 1 : -1,
         })
@@ -184,7 +188,7 @@ export class ApplicationsService {
       },
     };
   }
-    /**
+  /**
    * Get Application By Id
    */
   async findOne(id: string) {
@@ -193,23 +197,12 @@ export class ApplicationsService {
         _id: id,
         isDeleted: false,
       })
-      .populate(
-        'assignedTo',
-        'firstName lastName employeeId',
-      )
-      .populate(
-        'createdBy',
-        'firstName lastName employeeId',
-      )
-      .populate(
-        'updatedBy',
-        'firstName lastName employeeId',
-      );
+      .populate('assignedTo', 'firstName lastName employeeId')
+      .populate('createdBy', 'firstName lastName employeeId')
+      .populate('updatedBy', 'firstName lastName employeeId');
 
     if (!application) {
-      throw new NotFoundException(
-        'Application not found.',
-      );
+      throw new NotFoundException('Application not found.');
     }
 
     return {
@@ -222,34 +215,26 @@ export class ApplicationsService {
   /**
    * Update Application
    */
-  async update(
-    id: string,
-    updateApplicationDto: UpdateApplicationDto,
-  ) {
-    const application =
-      await this.applicationModel.findOne({
-        _id: id,
-        isDeleted: false,
-      });
+  async update(id: string, updateApplicationDto: UpdateApplicationDto) {
+    const application = await this.applicationModel.findOne({
+      _id: id,
+      isDeleted: false,
+    });
 
     if (!application) {
-      throw new NotFoundException(
-        'Application not found.',
-      );
+      throw new NotFoundException('Application not found.');
     }
 
     // Prevent duplicate Lead mapping
     if (
       updateApplicationDto.leadId &&
-      updateApplicationDto.leadId !==
-        application.leadId
+      updateApplicationDto.leadId !== application.leadId
     ) {
-      const exists =
-        await this.applicationModel.findOne({
-          leadId: updateApplicationDto.leadId,
-          _id: { $ne: id },
-          isDeleted: false,
-        });
+      const exists = await this.applicationModel.findOne({
+        leadId: updateApplicationDto.leadId,
+        _id: { $ne: id },
+        isDeleted: false,
+      });
 
       if (exists) {
         throw new ConflictException(
@@ -258,17 +243,31 @@ export class ApplicationsService {
       }
     }
 
-    const updatedApplication =
-      await this.applicationModel.findByIdAndUpdate(
-        id,
-        {
-          $set: updateApplicationDto,
-        },
-        {
-          new: true,
-          runValidators: true,
-        },
-      );
+    const updatedApplication = await this.applicationModel.findByIdAndUpdate(
+      id,
+      {
+        $set: updateApplicationDto,
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+
+    const payload = updateApplicationDto as any;
+    if (payload.status && payload.status !== application.status) {
+      await this.lifecycleEventsService.transitionStage({
+        entityType: 'Application',
+        entityId: application._id.toString(),
+        applicationId: application._id.toString(),
+        leadId: application.leadId,
+        customerId: application.customerId,
+        eventType: LifecycleEventType.APPLICATION_STAGE_CHANGED, // Or map to specific if needed
+        fromStage: application.status,
+        toStage: payload.status,
+        source: LifecycleEventSource.CRM,
+      });
+    }
 
     return {
       success: true,
@@ -281,59 +280,57 @@ export class ApplicationsService {
    * Soft Delete Application
    */
   async remove(id: string) {
-    const application =
-      await this.applicationModel.findOne({
-        _id: id,
-        isDeleted: false,
-      });
+    const application = await this.applicationModel.findOne({
+      _id: id,
+      isDeleted: false,
+    });
 
     if (!application) {
-      throw new NotFoundException(
-        'Application not found.',
-      );
+      throw new NotFoundException('Application not found.');
     }
 
-    await this.applicationModel.findByIdAndUpdate(
-      id,
-      {
-        isDeleted: true,
-      },
-    );
+    await this.applicationModel.findByIdAndUpdate(id, {
+      isDeleted: true,
+    });
 
     return {
       success: true,
-      message:
-        'Application deleted successfully.',
+      message: 'Application deleted successfully.',
     };
   }
-  
-    /**
+
+  /**
    * Change Application Status
    */
-  async changeStatus(
-    id: string,
-    status: ApplicationStatus,
-  ) {
-    const application =
-      await this.applicationModel.findOne({
-        _id: id,
-        isDeleted: false,
-      });
+  async changeStatus(id: string, status: ApplicationStatus) {
+    const application = await this.applicationModel.findOne({
+      _id: id,
+      isDeleted: false,
+    });
 
     if (!application) {
-      throw new NotFoundException(
-        'Application not found.',
-      );
+      throw new NotFoundException('Application not found.');
     }
 
+    const oldStatus = application.status;
     application.status = status;
-
     await application.save();
+
+    await this.lifecycleEventsService.transitionStage({
+      entityType: 'Application',
+      entityId: application._id.toString(),
+      applicationId: application._id.toString(),
+      leadId: application.leadId,
+      customerId: application.customerId,
+      eventType: LifecycleEventType.APPLICATION_STAGE_CHANGED,
+      fromStage: oldStatus,
+      toStage: status,
+      source: LifecycleEventSource.CRM,
+    });
 
     return {
       success: true,
-      message:
-        'Application status updated successfully.',
+      message: 'Application status updated successfully.',
       data: application,
     };
   }
@@ -341,20 +338,14 @@ export class ApplicationsService {
   /**
    * Assign Application
    */
-  async assignApplication(
-    id: string,
-    assignedTo: string,
-  ) {
-    const application =
-      await this.applicationModel.findOne({
-        _id: id,
-        isDeleted: false,
-      });
+  async assignApplication(id: string, assignedTo: string) {
+    const application = await this.applicationModel.findOne({
+      _id: id,
+      isDeleted: false,
+    });
 
     if (!application) {
-      throw new NotFoundException(
-        'Application not found.',
-      );
+      throw new NotFoundException('Application not found.');
     }
 
     application.assignedTo = assignedTo as any;
@@ -363,8 +354,7 @@ export class ApplicationsService {
 
     return {
       success: true,
-      message:
-        'Application assigned successfully.',
+      message: 'Application assigned successfully.',
       data: application,
     };
   }
@@ -429,5 +419,75 @@ export class ApplicationsService {
         disbursedApplications,
       },
     };
+  }
+
+  /**
+   * Sync Applications from OMS
+   */
+  async syncOmsApplications() {
+    const OMS_BASE_URL = process.env.OMS_BASE_URL || 'https://admin.f2fintech.in';
+    const OMS_COMPANY_ID = process.env.OMS_COMPANY_ID || '101';
+    
+    try {
+      const response = await fetch(`${OMS_BASE_URL}/api/v1/get-customer-loan-applications?companyId=${OMS_COMPANY_ID}`, {
+        headers: { 'companyid': OMS_COMPANY_ID }
+      });
+
+      if (!response.ok) {
+        throw new Error(`OMS API returned ${response.status}`);
+      }
+
+      const payload = await response.json();
+      const results = payload?.data?.results || [];
+
+      let updated = 0;
+      let skipped = 0;
+
+      for (const item of results) {
+        const omsApplicationId = String(item.applicationId);
+        const application = await this.applicationModel.findOne({ omsId: omsApplicationId });
+        
+        if (application) {
+          const statusLower = (item.loanStatus || '').toLowerCase();
+          let mappedStatus = ApplicationStatus.DRAFT;
+          if (statusLower === 'submitted') mappedStatus = ApplicationStatus.SUBMITTED;
+          else if (statusLower === 'approved') mappedStatus = ApplicationStatus.APPROVED;
+          else if (statusLower === 'rejected') mappedStatus = ApplicationStatus.REJECTED;
+          else if (statusLower === 'disbursed') mappedStatus = ApplicationStatus.DISBURSED;
+          else if (statusLower === 'under_review' || statusLower === 'pending') mappedStatus = ApplicationStatus.UNDER_REVIEW;
+
+          if (application.status !== mappedStatus) {
+            const oldStatus = application.status;
+            application.status = mappedStatus;
+            await application.save();
+
+            await this.lifecycleEventsService.transitionStage({
+              entityType: 'Application',
+              entityId: application._id.toString(),
+              applicationId: application._id.toString(),
+              leadId: application.leadId,
+              customerId: application.customerId,
+              eventType: LifecycleEventType.APPLICATION_STAGE_CHANGED,
+              fromStage: oldStatus,
+              toStage: mappedStatus,
+              source: LifecycleEventSource.OMS, // Using OMS source
+            });
+            updated++;
+          } else {
+            skipped++;
+          }
+        } else {
+          // If application doesn't exist, we don't automatically create one to avoid duplicate messy data,
+          // as per "If an OMS ID already exists in CRM, use it. Do not create duplicate customers/applications."
+          // But wait, if it doesn't exist, we might want to create it?
+          // For this lightweight requirement, we just sync existing linked applications.
+          skipped++;
+        }
+      }
+
+      return { success: true, updated, skipped };
+    } catch (error) {
+      return { success: false, error: (error as Error).message };
+    }
   }
 }

@@ -8,11 +8,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import {
-  ApiOperation,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { ApplicationsService } from './applications.service';
 import { CreateApplicationDto } from './dto/create-application.dto';
@@ -23,9 +19,15 @@ import { ApplicationStatus } from './schemas/application.schema';
 @ApiTags('Applications')
 @Controller('applications')
 export class ApplicationsController {
-  constructor(
-    private readonly applicationsService: ApplicationsService,
-  ) {}
+  constructor(private readonly applicationsService: ApplicationsService) {}
+
+  @Post('sync-oms')
+  @ApiOperation({
+    summary: 'Manually sync applications from OMS',
+  })
+  syncOmsApplications() {
+    return this.applicationsService.syncOmsApplications();
+  }
 
   @Post()
   @ApiOperation({
@@ -35,9 +37,7 @@ export class ApplicationsController {
     status: 201,
     description: 'Application created successfully.',
   })
-  create(
-    @Body() createApplicationDto: CreateApplicationDto,
-  ) {
+  create(@Body() createApplicationDto: CreateApplicationDto) {
     return this.applicationsService.create(createApplicationDto);
   }
 
@@ -45,9 +45,7 @@ export class ApplicationsController {
   @ApiOperation({
     summary: 'Get All Applications',
   })
-  findAll(
-    @Query() query: ApplicationQueryDto,
-  ) {
+  findAll(@Query() query: ApplicationQueryDto) {
     return this.applicationsService.findAll(query);
   }
 
@@ -63,9 +61,7 @@ export class ApplicationsController {
   @ApiOperation({
     summary: 'Get Application By Id',
   })
-  findOne(
-    @Param('id') id: string,
-  ) {
+  findOne(@Param('id') id: string) {
     return this.applicationsService.findOne(id);
   }
 
@@ -77,10 +73,7 @@ export class ApplicationsController {
     @Param('id') id: string,
     @Body() updateApplicationDto: UpdateApplicationDto,
   ) {
-    return this.applicationsService.update(
-      id,
-      updateApplicationDto,
-    );
+    return this.applicationsService.update(id, updateApplicationDto);
   }
 
   @Patch(':id/status')
@@ -91,10 +84,7 @@ export class ApplicationsController {
     @Param('id') id: string,
     @Body('status') status: ApplicationStatus,
   ) {
-    return this.applicationsService.changeStatus(
-      id,
-      status,
-    );
+    return this.applicationsService.changeStatus(id, status);
   }
 
   @Patch(':id/assign')
@@ -105,19 +95,14 @@ export class ApplicationsController {
     @Param('id') id: string,
     @Body('assignedTo') assignedTo: string,
   ) {
-    return this.applicationsService.assignApplication(
-      id,
-      assignedTo,
-    );
+    return this.applicationsService.assignApplication(id, assignedTo);
   }
 
   @Delete(':id')
   @ApiOperation({
     summary: 'Delete Application',
   })
-  remove(
-    @Param('id') id: string,
-  ) {
+  remove(@Param('id') id: string) {
     return this.applicationsService.remove(id);
   }
 }

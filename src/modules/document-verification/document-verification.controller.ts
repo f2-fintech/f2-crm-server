@@ -1,15 +1,27 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+} from '@nestjs/common';
 import { DocumentVerificationService } from './document-verification.service';
 import { CreateDocumentVerificationDto } from './dto/create-document-verification.dto';
 import { UpdateDocumentVerificationDto } from './dto/update-document-verification.dto';
 
 @Controller('document-verification')
 export class DocumentVerificationController {
-  constructor(private readonly documentVerificationService: DocumentVerificationService) {}
+  constructor(
+    private readonly documentVerificationService: DocumentVerificationService,
+  ) {}
 
   @Post()
   create(@Body() createDocumentVerificationDto: CreateDocumentVerificationDto) {
-    return this.documentVerificationService.create(createDocumentVerificationDto);
+    return this.documentVerificationService.create(
+      createDocumentVerificationDto,
+    );
   }
 
   @Get()
@@ -23,8 +35,14 @@ export class DocumentVerificationController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateDocumentVerificationDto: UpdateDocumentVerificationDto) {
-    return this.documentVerificationService.update(+id, updateDocumentVerificationDto);
+  update(
+    @Param('id') id: string,
+    @Body() updateDocumentVerificationDto: UpdateDocumentVerificationDto,
+  ) {
+    return this.documentVerificationService.update(
+      +id,
+      updateDocumentVerificationDto,
+    );
   }
 
   @Delete(':id')

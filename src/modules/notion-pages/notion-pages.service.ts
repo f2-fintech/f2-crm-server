@@ -1,4 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { NotionPage, NotionPageDocument } from './schemas/notion-page.schema';
@@ -12,21 +18,35 @@ import { Cron } from '@nestjs/schedule';
 @Injectable()
 export class NotionPagesService implements OnModuleInit {
   constructor(
-    @InjectModel(NotionPage.name) private readonly pageModel: Model<NotionPageDocument>,
-    @InjectModel(NotionLead.name) private readonly leadModel: Model<NotionLeadDocument>,
+    @InjectModel(NotionPage.name)
+    private readonly pageModel: Model<NotionPageDocument>,
+    @InjectModel(NotionLead.name)
+    private readonly leadModel: Model<NotionLeadDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectModel(Team.name) private readonly teamModel: Model<TeamDocument>,
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
-  ) { }
+  ) {}
 
   async onModuleInit() {
     try {
       console.log('Building NotionPage indexes for performance...');
-      await this.pageModel.collection.createIndex({ isDeleted: 1, parentPageId: 1 }, { background: true });
-      await this.pageModel.collection.createIndex({ isDeleted: 1, pageType: 1 }, { background: true });
-      await this.pageModel.collection.createIndex({ assignedMemberId: 1, isDeleted: 1, parentPageId: 1 }, { background: true });
-      await this.pageModel.collection.createIndex({ teamId: 1, isDeleted: 1 }, { background: true });
+      await this.pageModel.collection.createIndex(
+        { isDeleted: 1, parentPageId: 1 },
+        { background: true },
+      );
+      await this.pageModel.collection.createIndex(
+        { isDeleted: 1, pageType: 1 },
+        { background: true },
+      );
+      await this.pageModel.collection.createIndex(
+        { assignedMemberId: 1, isDeleted: 1, parentPageId: 1 },
+        { background: true },
+      );
+      await this.pageModel.collection.createIndex(
+        { teamId: 1, isDeleted: 1 },
+        { background: true },
+      );
       console.log('NotionPage indexes verified.');
     } catch (error) {
       console.error('Error building indexes:', error);
@@ -47,14 +67,28 @@ export class NotionPagesService implements OnModuleInit {
     if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
       if (assignedMemberId && assignedMemberId !== user._id.toString()) {
         if (role === 'MANAGER') {
-          const assignedUser = await this.userModel.findById(assignedMemberId).lean();
-          if (!assignedUser || assignedUser.teamId?.toString() !== user.teamId?.toString()) {
-            throw new ForbiddenException('Can only assign to your team members');
+          const assignedUser = await this.userModel
+            .findById(assignedMemberId)
+            .lean();
+          if (
+            !assignedUser ||
+            assignedUser.teamId?.toString() !== user.teamId?.toString()
+          ) {
+            throw new ForbiddenException(
+              'Can only assign to your team members',
+            );
           }
         } else if (role === 'TEAM_LEADER') {
-          const assignedUser = await this.userModel.findById(assignedMemberId).lean();
-          if (!assignedUser || assignedUser.reportsTo?.toString() !== user._id.toString()) {
-            throw new ForbiddenException('Can only assign to your direct reports');
+          const assignedUser = await this.userModel
+            .findById(assignedMemberId)
+            .lean();
+          if (
+            !assignedUser ||
+            assignedUser.reportsTo?.toString() !== user._id.toString()
+          ) {
+            throw new ForbiddenException(
+              'Can only assign to your direct reports',
+            );
           }
         } else {
           throw new ForbiddenException('You can only assign pages to yourself');
@@ -77,11 +111,13 @@ export class NotionPagesService implements OnModuleInit {
     const page = new this.pageModel({
       ...createDto,
       parentPageId: parentPageId ? new Types.ObjectId(parentPageId) : null,
-      assignedMemberId: assignedMemberId ? new Types.ObjectId(assignedMemberId) : null,
+      assignedMemberId: assignedMemberId
+        ? new Types.ObjectId(assignedMemberId)
+        : null,
       createdBy: user._id,
       teamId: user.teamId,
     });
-    
+
     const saved = await page.save();
 
     if (assignedMemberId && assignedMemberId !== user._id.toString()) {
@@ -96,12 +132,14 @@ export class NotionPagesService implements OnModuleInit {
       // Fetch assignee to get email
       const assignee = await this.userModel.findById(assignedMemberId).lean();
       if (assignee && assignee.email) {
-        this.mailService.sendPageAssignmentEmail(
-          assignee.email, 
-          `${assignee.firstName} ${assignee.lastName}`, 
-          saved.title, 
-          saved._id.toString()
-        ).catch(e => console.error("Mail error:", e));
+        this.mailService
+          .sendPageAssignmentEmail(
+            assignee.email,
+            `${assignee.firstName} ${assignee.lastName}`,
+            saved.title,
+            saved._id.toString(),
+          )
+          .catch((e) => console.error('Mail error:', e));
       }
     }
 
@@ -113,7 +151,9 @@ export class NotionPagesService implements OnModuleInit {
     while (current && !current.assignedMemberId && current.parentPageId) {
       current = await this.pageModel.findById(current.parentPageId).lean();
     }
-    return current?.assignedMemberId ? current.assignedMemberId.toString() : null;
+    return current?.assignedMemberId
+      ? current.assignedMemberId.toString()
+      : null;
   }
 
   private async checkAccess(page: any, user: any) {
@@ -128,11 +168,17 @@ export class NotionPagesService implements OnModuleInit {
       const assignedUser = await this.userModel.findById(assignedToId).lean();
       if (!assignedUser) return false;
 
-      if (role === 'MANAGER' && assignedUser.teamId?.toString() === user.teamId?.toString()) {
+      if (
+        role === 'MANAGER' &&
+        assignedUser.teamId?.toString() === user.teamId?.toString()
+      ) {
         return true;
       }
 
-      if (role === 'TEAM_LEADER' && assignedUser.reportsTo?.toString() === user._id.toString()) {
+      if (
+        role === 'TEAM_LEADER' &&
+        assignedUser.reportsTo?.toString() === user._id.toString()
+      ) {
         return true;
       }
 
@@ -143,7 +189,12 @@ export class NotionPagesService implements OnModuleInit {
       const pageTeam = await this.teamModel.findById(page.teamId).lean();
       if (pageTeam) {
         if (pageTeam.managerId?.toString() === user._id.toString()) return true;
-        if (pageTeam.members?.some((m: any) => m.toString() === user._id.toString())) return true;
+        if (
+          pageTeam.members?.some(
+            (m: any) => m.toString() === user._id.toString(),
+          )
+        )
+          return true;
       }
       if (page.teamId.toString() === user.teamId?.toString()) return true;
       if (page.createdBy?.toString() === user._id.toString()) return true;
@@ -155,16 +206,20 @@ export class NotionPagesService implements OnModuleInit {
   }
 
   async getTree(user: any) {
-    const pages = await this.pageModel.find({ isDeleted: false, parentPageId: null }).select('-rows -content').lean();
+    const pages = await this.pageModel
+      .find({ isDeleted: false, parentPageId: null })
+      .select('-rows -content')
+      .lean();
 
     const pagesByAssignedMember = new Map();
     const genericPagesByTeam = new Map();
 
-    pages.forEach(p => {
+    pages.forEach((p) => {
       if (!p.parentPageId) {
         if (p.assignedMemberId) {
           const uid = p.assignedMemberId.toString();
-          if (!pagesByAssignedMember.has(uid)) pagesByAssignedMember.set(uid, []);
+          if (!pagesByAssignedMember.has(uid))
+            pagesByAssignedMember.set(uid, []);
           pagesByAssignedMember.get(uid).push(p);
         } else if (p.teamId) {
           const tid = p.teamId.toString();
@@ -181,52 +236,70 @@ export class NotionPagesService implements OnModuleInit {
     if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
       const activeTeams = await this.teamModel.find({ isActive: true }).lean();
       const allUsers = await this.userModel.find({ isActive: true }).lean();
-      allowedTeamIds = activeTeams.map(t => t._id.toString());
-      allowedUserIds = allUsers.map(u => u._id.toString());
+      allowedTeamIds = activeTeams.map((t) => t._id.toString());
+      allowedUserIds = allUsers.map((u) => u._id.toString());
     } else if (role === 'MANAGER') {
-      const managedTeams = await this.teamModel.find({ 
-        isActive: true, 
-        $or: [{ managerId: user._id }, { members: user._id }] 
-      }).lean();
-      const managedTeamIds = managedTeams.map(t => t._id.toString());
-      
+      const managedTeams = await this.teamModel
+        .find({
+          isActive: true,
+          $or: [{ managerId: user._id }, { members: user._id }],
+        })
+        .lean();
+      const managedTeamIds = managedTeams.map((t) => t._id.toString());
+
       if (user.teamId && !managedTeamIds.includes(user.teamId.toString())) {
         managedTeamIds.push(user.teamId.toString());
       }
       allowedTeamIds = managedTeamIds;
 
       if (allowedTeamIds.length > 0) {
-        const teamUsers = await this.userModel.find({ teamId: { $in: allowedTeamIds }, isActive: true }).lean();
-        allowedUserIds = [...new Set([...teamUsers.map(u => u._id.toString()), user._id.toString()])];
+        const teamUsers = await this.userModel
+          .find({ teamId: { $in: allowedTeamIds }, isActive: true })
+          .lean();
+        allowedUserIds = [
+          ...new Set([
+            ...teamUsers.map((u) => u._id.toString()),
+            user._id.toString(),
+          ]),
+        ];
       } else {
         allowedUserIds = [user._id.toString()];
       }
     } else if (role === 'TEAM_LEADER') {
-      const leaderTeams = await this.teamModel.find({ 
-        isActive: true, 
-        members: user._id 
-      }).lean();
-      const leaderTeamIds = leaderTeams.map(t => t._id.toString());
-      
+      const leaderTeams = await this.teamModel
+        .find({
+          isActive: true,
+          members: user._id,
+        })
+        .lean();
+      const leaderTeamIds = leaderTeams.map((t) => t._id.toString());
+
       if (user.teamId && !leaderTeamIds.includes(user.teamId.toString())) {
         leaderTeamIds.push(user.teamId.toString());
       }
       allowedTeamIds = leaderTeamIds;
-      
-      const reports = await this.userModel.find({ reportsTo: user._id, isActive: true }).lean();
-      allowedUserIds = [user._id.toString(), ...reports.map(r => r._id.toString())];
+
+      const reports = await this.userModel
+        .find({ reportsTo: user._id, isActive: true })
+        .lean();
+      allowedUserIds = [
+        user._id.toString(),
+        ...reports.map((r) => r._id.toString()),
+      ];
     } else {
-      const memberTeams = await this.teamModel.find({ 
-        isActive: true, 
-        members: user._id 
-      }).lean();
-      const memberTeamIds = memberTeams.map(t => t._id.toString());
-      
+      const memberTeams = await this.teamModel
+        .find({
+          isActive: true,
+          members: user._id,
+        })
+        .lean();
+      const memberTeamIds = memberTeams.map((t) => t._id.toString());
+
       if (user.teamId && !memberTeamIds.includes(user.teamId.toString())) {
         memberTeamIds.push(user.teamId.toString());
       }
       allowedTeamIds = memberTeamIds;
-      
+
       allowedUserIds = [user._id.toString()];
     }
 
@@ -238,18 +311,24 @@ export class NotionPagesService implements OnModuleInit {
       allUsers = await this.userModel.find({ isActive: true }).lean();
     } else {
       if (allowedTeamIds.length > 0) {
-        activeTeams = await this.teamModel.find({ isActive: true, _id: { $in: allowedTeamIds } }).lean();
+        activeTeams = await this.teamModel
+          .find({ isActive: true, _id: { $in: allowedTeamIds } })
+          .lean();
       }
       if (allowedUserIds.length > 0) {
-        allUsers = await this.userModel.find({ isActive: true, _id: { $in: allowedUserIds } }).lean();
+        allUsers = await this.userModel
+          .find({ isActive: true, _id: { $in: allowedUserIds } })
+          .lean();
       }
     }
 
-    const teamFolders = activeTeams.map(team => {
+    const teamFolders = activeTeams.map((team) => {
       const teamIdStr = team._id.toString();
-      const teamMembers = allUsers.filter(u => u.teamId?.toString() === teamIdStr);
+      const teamMembers = allUsers.filter(
+        (u) => u.teamId?.toString() === teamIdStr,
+      );
 
-      const memberNodes = teamMembers.map(u => {
+      const memberNodes = teamMembers.map((u) => {
         const userIdStr = u._id.toString();
         return {
           _id: `user_${userIdStr}`,
@@ -257,12 +336,17 @@ export class NotionPagesService implements OnModuleInit {
           title: `${u.firstName} ${u.lastName} (${u.role === 'MANAGER' ? 'Manager' : 'Member'})`,
           pageType: 'PAGE',
           section: 'SHARED',
-          children: pagesByAssignedMember.get(userIdStr) || []
+          children: pagesByAssignedMember.get(userIdStr) || [],
         };
       });
 
-      const genericPages = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEAM_LEADER'].includes(role)
-        ? (genericPagesByTeam.get(teamIdStr) || [])
+      const genericPages = [
+        'SUPER_ADMIN',
+        'ADMIN',
+        'MANAGER',
+        'TEAM_LEADER',
+      ].includes(role)
+        ? genericPagesByTeam.get(teamIdStr) || []
         : [];
 
       return {
@@ -271,55 +355,82 @@ export class NotionPagesService implements OnModuleInit {
         title: team.name,
         pageType: 'PAGE',
         section: 'SHARED',
-        children: [...memberNodes, ...genericPages]
+        children: [...memberNodes, ...genericPages],
       };
     });
 
     return {
       shared: teamFolders,
-      private: pages.filter(p => p.section === 'PRIVATE' && p.createdBy?.toString() === user._id.toString()),
-      workspace: pages.filter(p => p.section === 'WORKSPACE' && (['SUPER_ADMIN', 'ADMIN'].includes(role) || p.createdBy?.toString() === user._id.toString())),
+      private: pages.filter(
+        (p) =>
+          p.section === 'PRIVATE' &&
+          p.createdBy?.toString() === user._id.toString(),
+      ),
+      workspace: pages.filter(
+        (p) =>
+          p.section === 'WORKSPACE' &&
+          (['SUPER_ADMIN', 'ADMIN'].includes(role) ||
+            p.createdBy?.toString() === user._id.toString()),
+      ),
     };
   }
 
-  
   private async buildTeamRootNode(team: any, user: any, role: string) {
     const teamIdStr = team._id.toString();
-    const teamPages = await this.pageModel.find({ teamId: team._id, isDeleted: false, parentPageId: null }).select('-rows -content').lean();
-    
+    const teamPages = await this.pageModel
+      .find({ teamId: team._id, isDeleted: false, parentPageId: null })
+      .select('-rows -content')
+      .lean();
+
     let allowedUserIds: string[] = [];
     if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
       const allUsers = await this.userModel.find({ isActive: true }).lean();
-      allowedUserIds = allUsers.map(u => u._id.toString());
+      allowedUserIds = allUsers.map((u) => u._id.toString());
     } else if (role === 'MANAGER') {
-      const managedTeams = await this.teamModel.find({ 
-        isActive: true, 
-        $or: [{ managerId: user._id }, { members: user._id }] 
-      }).lean();
-      const managedTeamIds = managedTeams.map(t => t._id.toString());
+      const managedTeams = await this.teamModel
+        .find({
+          isActive: true,
+          $or: [{ managerId: user._id }, { members: user._id }],
+        })
+        .lean();
+      const managedTeamIds = managedTeams.map((t) => t._id.toString());
       if (user.teamId && !managedTeamIds.includes(user.teamId.toString())) {
         managedTeamIds.push(user.teamId.toString());
       }
       if (managedTeamIds.length > 0) {
-        const teamUsers = await this.userModel.find({ teamId: { $in: managedTeamIds }, isActive: true }).lean();
-        allowedUserIds = [...new Set([...teamUsers.map(u => u._id.toString()), user._id.toString()])];
+        const teamUsers = await this.userModel
+          .find({ teamId: { $in: managedTeamIds }, isActive: true })
+          .lean();
+        allowedUserIds = [
+          ...new Set([
+            ...teamUsers.map((u) => u._id.toString()),
+            user._id.toString(),
+          ]),
+        ];
       } else {
         allowedUserIds = [user._id.toString()];
       }
     } else if (role === 'TEAM_LEADER') {
-      const reports = await this.userModel.find({ reportsTo: user._id, isActive: true }).lean();
-      allowedUserIds = [user._id.toString(), ...reports.map(r => r._id.toString())];
+      const reports = await this.userModel
+        .find({ reportsTo: user._id, isActive: true })
+        .lean();
+      allowedUserIds = [
+        user._id.toString(),
+        ...reports.map((r) => r._id.toString()),
+      ];
     } else {
       allowedUserIds = [user._id.toString()];
     }
 
-    const teamMembers = await this.userModel.find({ 
-      teamId: team._id, 
-      isActive: true,
-      _id: { $in: allowedUserIds } 
-    }).lean();
+    const teamMembers = await this.userModel
+      .find({
+        teamId: team._id,
+        isActive: true,
+        _id: { $in: allowedUserIds },
+      })
+      .lean();
 
-    const memberNodes = teamMembers.map(u => {
+    const memberNodes = teamMembers.map((u) => {
       const userIdStr = u._id.toString();
       return {
         _id: `user_${userIdStr}`,
@@ -327,12 +438,19 @@ export class NotionPagesService implements OnModuleInit {
         title: `${u.firstName} ${u.lastName} (${u.role === 'MANAGER' ? 'Manager' : 'Member'})`,
         pageType: 'PAGE',
         section: 'SHARED',
-        children: teamPages.filter(p => p.assignedMemberId?.toString() === userIdStr)
+        children: teamPages.filter(
+          (p) => p.assignedMemberId?.toString() === userIdStr,
+        ),
       };
     });
 
-    const genericPages = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEAM_LEADER'].includes(role)
-      ? teamPages.filter(p => !p.assignedMemberId)
+    const genericPages = [
+      'SUPER_ADMIN',
+      'ADMIN',
+      'MANAGER',
+      'TEAM_LEADER',
+    ].includes(role)
+      ? teamPages.filter((p) => !p.assignedMemberId)
       : [];
 
     return {
@@ -343,7 +461,7 @@ export class NotionPagesService implements OnModuleInit {
       section: 'SHARED',
       rows: [],
       columns: [],
-      children: [...memberNodes, ...genericPages]
+      children: [...memberNodes, ...genericPages],
     };
   }
 
@@ -357,12 +475,18 @@ export class NotionPagesService implements OnModuleInit {
         if (userId !== user._id.toString()) {
           if (role === 'MANAGER') {
             const targetUser = await this.userModel.findById(userId).lean();
-            if (!targetUser || targetUser.teamId?.toString() !== user.teamId?.toString()) {
+            if (
+              !targetUser ||
+              targetUser.teamId?.toString() !== user.teamId?.toString()
+            ) {
               throw new ForbiddenException('Not allowed to view this folder');
             }
           } else if (role === 'TEAM_LEADER') {
             const targetUser = await this.userModel.findById(userId).lean();
-            if (!targetUser || targetUser.reportsTo?.toString() !== user._id.toString()) {
+            if (
+              !targetUser ||
+              targetUser.reportsTo?.toString() !== user._id.toString()
+            ) {
               throw new ForbiddenException('Not allowed to view this folder');
             }
           } else {
@@ -374,7 +498,14 @@ export class NotionPagesService implements OnModuleInit {
       const targetUser = await this.userModel.findById(userId).lean();
       if (!targetUser) throw new NotFoundException('User not found');
 
-      const userPages = await this.pageModel.find({ assignedMemberId: userId as any, parentPageId: null, isDeleted: false }).select('-rows -content').lean();
+      const userPages = await this.pageModel
+        .find({
+          assignedMemberId: userId as any,
+          parentPageId: null,
+          isDeleted: false,
+        })
+        .select('-rows -content')
+        .lean();
 
       return {
         _id: id,
@@ -384,7 +515,7 @@ export class NotionPagesService implements OnModuleInit {
         section: 'SHARED',
         rows: [],
         columns: [],
-        children: userPages
+        children: userPages,
       };
     }
 
@@ -392,20 +523,25 @@ export class NotionPagesService implements OnModuleInit {
       const team = await this.teamModel.findById(id).lean();
       if (team) {
         if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
-          const isMyTeam = 
-            user.teamId?.toString() === id || 
-            team.managerId?.toString() === user._id.toString() || 
-            team.members?.some((m: any) => m.toString() === user._id.toString());
-            
+          const isMyTeam =
+            user.teamId?.toString() === id ||
+            team.managerId?.toString() === user._id.toString() ||
+            team.members?.some(
+              (m: any) => m.toString() === user._id.toString(),
+            );
+
           if (!isMyTeam) {
-            throw new ForbiddenException('Not allowed to view this team folder');
+            throw new ForbiddenException(
+              'Not allowed to view this team folder',
+            );
           }
         }
         return this.buildTeamRootNode(team, user, role);
       }
     }
 
-    const page = await this.pageModel.findById(id)
+    const page = await this.pageModel
+      .findById(id)
       .populate('assignmentLogs.assignedTo', 'firstName lastName')
       .populate('assignmentLogs.assignedBy', 'firstName lastName')
       .populate('updateLogs.updatedBy', 'firstName lastName')
@@ -413,9 +549,13 @@ export class NotionPagesService implements OnModuleInit {
     if (!page) throw new NotFoundException('Page not found');
 
     const hasAccess = await this.checkAccess(page, user);
-    if (!hasAccess) throw new ForbiddenException('You do not have access to this page');
+    if (!hasAccess)
+      throw new ForbiddenException('You do not have access to this page');
 
-    const children = await this.pageModel.find({ parentPageId: id as any, isDeleted: false }).select('-rows -content').lean();
+    const children = await this.pageModel
+      .find({ parentPageId: id as any, isDeleted: false })
+      .select('-rows -content')
+      .lean();
     return { ...page, children };
   }
 
@@ -437,20 +577,40 @@ export class NotionPagesService implements OnModuleInit {
     if (!page) throw new NotFoundException('Page not found');
 
     const hasAccess = await this.checkAccess(page, user);
-    if (!hasAccess) throw new ForbiddenException('You do not have access to update this page');
+    if (!hasAccess)
+      throw new ForbiddenException(
+        'You do not have access to update this page',
+      );
 
-    if (updateData.assignedMemberId && updateData.assignedMemberId !== page.assignedMemberId?.toString()) {
+    if (
+      updateData.assignedMemberId &&
+      updateData.assignedMemberId !== page.assignedMemberId?.toString()
+    ) {
       const role = user.role?.toUpperCase();
       if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
         if (role === 'MANAGER') {
-          const targetUser = await this.userModel.findById(updateData.assignedMemberId).lean();
-          if (!targetUser || targetUser.teamId?.toString() !== user.teamId?.toString()) {
-            throw new ForbiddenException('Can only assign to your team members');
+          const targetUser = await this.userModel
+            .findById(updateData.assignedMemberId)
+            .lean();
+          if (
+            !targetUser ||
+            targetUser.teamId?.toString() !== user.teamId?.toString()
+          ) {
+            throw new ForbiddenException(
+              'Can only assign to your team members',
+            );
           }
         } else if (role === 'TEAM_LEADER') {
-          const targetUser = await this.userModel.findById(updateData.assignedMemberId).lean();
-          if (!targetUser || targetUser.reportsTo?.toString() !== user._id.toString()) {
-            throw new ForbiddenException('Can only assign to your direct reports');
+          const targetUser = await this.userModel
+            .findById(updateData.assignedMemberId)
+            .lean();
+          if (
+            !targetUser ||
+            targetUser.reportsTo?.toString() !== user._id.toString()
+          ) {
+            throw new ForbiddenException(
+              'Can only assign to your direct reports',
+            );
           }
         } else {
           throw new ForbiddenException('Not allowed to reassign this page');
@@ -458,14 +618,17 @@ export class NotionPagesService implements OnModuleInit {
       }
     }
 
-    let pushUpdate: any = {};
+    const pushUpdate: any = {};
     const pushObj: any = {};
 
-    if (updateData.assignedMemberId && updateData.assignedMemberId !== page.assignedMemberId?.toString()) {
+    if (
+      updateData.assignedMemberId &&
+      updateData.assignedMemberId !== page.assignedMemberId?.toString()
+    ) {
       pushObj.assignmentLogs = {
         assignedTo: new Types.ObjectId(updateData.assignedMemberId),
         assignedBy: user._id,
-        assignedAt: new Date()
+        assignedAt: new Date(),
       };
     }
 
@@ -473,13 +636,13 @@ export class NotionPagesService implements OnModuleInit {
       pushObj.updateLogs = {
         updatedBy: user._id,
         updatedAt: new Date(),
-        action: 'Updated sheet data'
+        action: 'Updated sheet data',
       };
     } else if (updateData.content) {
       pushObj.updateLogs = {
         updatedBy: user._id,
         updatedAt: new Date(),
-        action: 'Updated document content'
+        action: 'Updated document content',
       };
     }
 
@@ -487,20 +650,20 @@ export class NotionPagesService implements OnModuleInit {
       pushUpdate.$push = pushObj;
     }
 
-    const updatedPage = await this.pageModel.findByIdAndUpdate(
-      id, 
-      { ...updateData, ...pushUpdate }, 
-      { new: true }
-    )
-    .populate('assignmentLogs.assignedTo', 'firstName lastName')
-    .populate('assignmentLogs.assignedBy', 'firstName lastName')
-    .populate('updateLogs.updatedBy', 'firstName lastName');
+    const updatedPage = await this.pageModel
+      .findByIdAndUpdate(id, { ...updateData, ...pushUpdate }, { new: true })
+      .populate('assignmentLogs.assignedTo', 'firstName lastName')
+      .populate('assignmentLogs.assignedBy', 'firstName lastName')
+      .populate('updateLogs.updatedBy', 'firstName lastName');
 
     if (!updatedPage) {
       throw new NotFoundException('Page not found');
     }
 
-    if (updateData.assignedMemberId && updateData.assignedMemberId !== page.assignedMemberId?.toString()) {
+    if (
+      updateData.assignedMemberId &&
+      updateData.assignedMemberId !== page.assignedMemberId?.toString()
+    ) {
       await this.notificationsService.createNotification({
         recipient: updateData.assignedMemberId,
         title: 'New Page Assigned',
@@ -510,17 +673,21 @@ export class NotionPagesService implements OnModuleInit {
       });
 
       // Fetch assignee to get email
-      const assignee = await this.userModel.findById(updateData.assignedMemberId).lean();
+      const assignee = await this.userModel
+        .findById(updateData.assignedMemberId)
+        .lean();
       if (assignee && assignee.email) {
-        this.mailService.sendPageAssignmentEmail(
-          assignee.email, 
-          `${assignee.firstName} ${assignee.lastName}`, 
-          updatedPage.title, 
-          id
-        ).catch(e => console.error("Mail error:", e));
+        this.mailService
+          .sendPageAssignmentEmail(
+            assignee.email,
+            `${assignee.firstName} ${assignee.lastName}`,
+            updatedPage.title,
+            id,
+          )
+          .catch((e) => console.error('Mail error:', e));
       }
     }
-    
+
     return updatedPage;
   }
 
@@ -543,10 +710,10 @@ export class NotionPagesService implements OnModuleInit {
     const page = await this.pageModel.findById(id).lean();
     if (!page) throw new NotFoundException('Page not found');
 
-    await this.pageModel.findByIdAndUpdate(id, { 
+    await this.pageModel.findByIdAndUpdate(id, {
       isDeleted: true,
       deletedBy: user._id || user.id,
-      deletedAt: new Date()
+      deletedAt: new Date(),
     });
     return { success: true };
   }
@@ -556,7 +723,8 @@ export class NotionPagesService implements OnModuleInit {
       return { logs: [] };
     }
 
-    const page = await this.pageModel.findById(id)
+    const page = await this.pageModel
+      .findById(id)
       .populate('createdBy', 'firstName lastName email')
       .populate('assignedMemberId', 'firstName lastName email')
       .populate({
@@ -592,7 +760,7 @@ export class NotionPagesService implements OnModuleInit {
     }
 
     // Assignment logs
-    for (const al of (page.assignmentLogs || [])) {
+    for (const al of page.assignmentLogs || []) {
       logs.push({
         type: 'ASSIGNED',
         action: `Page assigned`,
@@ -603,7 +771,7 @@ export class NotionPagesService implements OnModuleInit {
     }
 
     // Update logs
-    for (const ul of (page.updateLogs || [])) {
+    for (const ul of page.updateLogs || []) {
       logs.push({
         type: 'UPDATED',
         action: ul.action || 'Page updated',
@@ -613,7 +781,10 @@ export class NotionPagesService implements OnModuleInit {
     }
 
     // Sort by timestamp descending (newest first)
-    logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    logs.sort(
+      (a, b) =>
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+    );
 
     return { logs, page: { _id: page._id, title: page.title } };
   }
@@ -626,17 +797,18 @@ export class NotionPagesService implements OnModuleInit {
     const fortyFiveDaysAgo = new Date();
     fortyFiveDaysAgo.setDate(fortyFiveDaysAgo.getDate() - 45);
 
-    return this.pageModel.find({ 
-      isDeleted: true,
-      deletedAt: { $gte: fortyFiveDaysAgo }
-    })
-    .populate({
-      path: 'createdBy',
-      select: 'firstName lastName email teamId',
-      populate: { path: 'teamId', select: 'name' }
-    })
-    .populate('deletedBy', 'firstName lastName email')
-    .lean();
+    return this.pageModel
+      .find({
+        isDeleted: true,
+        deletedAt: { $gte: fortyFiveDaysAgo },
+      })
+      .populate({
+        path: 'createdBy',
+        select: 'firstName lastName email teamId',
+        populate: { path: 'teamId', select: 'name' },
+      })
+      .populate('deletedBy', 'firstName lastName email')
+      .lean();
   }
 
   async restorePage(id: string, user: any) {
@@ -646,10 +818,10 @@ export class NotionPagesService implements OnModuleInit {
     }
     const page = await this.pageModel.findById(id).lean();
     if (!page) throw new NotFoundException('Page not found');
-    
-    await this.pageModel.findByIdAndUpdate(id, { 
+
+    await this.pageModel.findByIdAndUpdate(id, {
       $set: { isDeleted: false },
-      $unset: { deletedBy: 1, deletedAt: 1 }
+      $unset: { deletedBy: 1, deletedAt: 1 },
     });
     return { success: true };
   }
@@ -661,7 +833,7 @@ export class NotionPagesService implements OnModuleInit {
 
     await this.pageModel.deleteMany({
       isDeleted: true,
-      deletedAt: { $lt: fortyFiveDaysAgo }
+      deletedAt: { $lt: fortyFiveDaysAgo },
     });
   }
 
@@ -688,16 +860,16 @@ export class NotionPagesService implements OnModuleInit {
 
     const updatedPage = await this.pageModel.findByIdAndUpdate(
       id,
-      { 
-        columns: [], 
+      {
+        columns: [],
         rows: [],
         $push: {
           updateLogs: {
             updatedBy: user._id,
             updatedAt: new Date(),
-            action: 'Cleared sheet data'
-          }
-        }
+            action: 'Cleared sheet data',
+          },
+        },
       },
       { new: true },
     );
@@ -706,10 +878,12 @@ export class NotionPagesService implements OnModuleInit {
 
   async shareEmail(pageId: string, email: string) {
     const token = 'mock_token_123_' + Date.now();
-    
+
     // Dispatch real email using MailService
-    this.mailService.sendPageInviteEmail(email, token).catch(e => console.error("Invite Mail error:", e));
-    
+    this.mailService
+      .sendPageInviteEmail(email, token)
+      .catch((e) => console.error('Invite Mail error:', e));
+
     return { success: true, message: 'Invite sent', token };
   }
 
@@ -729,7 +903,7 @@ export class NotionPagesService implements OnModuleInit {
       parentPageId: targetParentId || page.parentPageId,
       createdBy: page.createdBy,
       teamId: page.teamId,
-      rows: [] // clone format, not data
+      rows: [], // clone format, not data
     });
 
     return clone.save();
@@ -748,16 +922,16 @@ export class NotionPagesService implements OnModuleInit {
           from: 'teams',
           localField: 'teamId',
           foreignField: '_id',
-          as: 'team'
-        }
+          as: 'team',
+        },
       },
       {
         $lookup: {
           from: 'users',
           localField: 'assignedMemberId',
           foreignField: '_id',
-          as: 'assignedMember'
-        }
+          as: 'assignedMember',
+        },
       },
       {
         $project: {
@@ -766,99 +940,114 @@ export class NotionPagesService implements OnModuleInit {
           rows: 1,
           createdAt: 1,
           teamId: { $arrayElemAt: ['$team', 0] },
-          assignedMemberId: { $arrayElemAt: ['$assignedMember', 0] }
-        }
-      }
+          assignedMemberId: { $arrayElemAt: ['$assignedMember', 0] },
+        },
+      },
     ]);
 
-    return pages.map(page => {
-      const teamName = page.teamId?.name || 'Unassigned';
-      const assignedTo = page.assignedMemberId
-        ? `${page.assignedMemberId.firstName} ${page.assignedMemberId.lastName}`
-        : 'Unassigned';
+    return pages
+      .map((page) => {
+        const teamName = page.teamId?.name || 'Unassigned';
+        const assignedTo = page.assignedMemberId
+          ? `${page.assignedMemberId.firstName} ${page.assignedMemberId.lastName}`
+          : 'Unassigned';
 
-      // Build a column key → column name map (col_0 → "Name", col_1 → "Mobile", etc.)
-      const colMap: Record<string, string> = {};
-      if (Array.isArray(page.columns)) {
-        page.columns.forEach((col: any) => {
-          if (col.key && col.name) {
-            colMap[col.key] = col.name;
-          }
-        });
-      }
-
-      // Identify which columns contain remarks/feedback
-      const remarkKeys = Object.entries(colMap)
-        .filter(([, name]) => {
-          const n = name.toLowerCase();
-          return n.includes('remark') || n.includes('feedback') || n.includes('comment') || n.includes('note');
-        })
-        .map(([key]) => key);
-
-      // Also look for raw keys that look like feedback fields even without column map
-      const allRowKeys = new Set<string>();
-      (page.rows || []).forEach((row: any) => {
-        Object.keys(row).forEach(k => {
-          if (k !== 'id') allRowKeys.add(k);
-        });
-      });
-      allRowKeys.forEach(k => {
-        const kl = k.toLowerCase();
-        if (kl.includes('remark') || kl.includes('feedback') || kl.includes('comment') || kl.includes('note')) {
-          if (!remarkKeys.includes(k)) remarkKeys.push(k);
+        // Build a column key → column name map (col_0 → "Name", col_1 → "Mobile", etc.)
+        const colMap: Record<string, string> = {};
+        if (Array.isArray(page.columns)) {
+          page.columns.forEach((col: any) => {
+            if (col.key && col.name) {
+              colMap[col.key] = col.name;
+            }
+          });
         }
-      });
 
-      let remarksFilled = 0;
-      let remarksEmpty = 0;
+        // Identify which columns contain remarks/feedback
+        const remarkKeys = Object.entries(colMap)
+          .filter(([, name]) => {
+            const n = name.toLowerCase();
+            return (
+              n.includes('remark') ||
+              n.includes('feedback') ||
+              n.includes('comment') ||
+              n.includes('note')
+            );
+          })
+          .map(([key]) => key);
 
-      // Filter FIRST to avoid allocating millions of objects for empty rows
-      const rowsWithRemarksRaw = (page.rows || []).filter((row: any) => {
-        const hasRemarkText = remarkKeys.some(k => row[k] && String(row[k]).trim() !== '');
-        const hasDisposition = row.disposition && String(row.disposition).trim() !== '';
-        
-        if (hasRemarkText || hasDisposition) {
-          remarksFilled++;
-          return true;
-        } else {
-          remarksEmpty++;
-          return false;
-        }
-      });
-
-      // Map ONLY the rows that have remarks to human-readable objects
-      const mappedRows = rowsWithRemarksRaw.map((row: any) => {
-        const readable: Record<string, any> = { _rowId: row.id };
-        Object.entries(row).forEach(([key, value]) => {
-          if (key === 'id') return;
-          if (key === 'disposition') {
-            readable.disposition = value;
-            return;
-          }
-          if (key === 'feedback_notes') {
-            readable.feedback_notes = value;
-            return;
-          }
-          const humanKey = colMap[key] || key; // fallback to raw key if no mapping
-          readable[humanKey] = value;
+        // Also look for raw keys that look like feedback fields even without column map
+        const allRowKeys = new Set<string>();
+        (page.rows || []).forEach((row: any) => {
+          Object.keys(row).forEach((k) => {
+            if (k !== 'id') allRowKeys.add(k);
+          });
         });
-        return readable;
-      });
+        allRowKeys.forEach((k) => {
+          const kl = k.toLowerCase();
+          if (
+            kl.includes('remark') ||
+            kl.includes('feedback') ||
+            kl.includes('comment') ||
+            kl.includes('note')
+          ) {
+            if (!remarkKeys.includes(k)) remarkKeys.push(k);
+          }
+        });
 
-      return {
-        _id: page._id,
-        title: page.title,
-        teamName,
-        assignedTo,
-        createdAt: (page as any).createdAt,
-        columns: page.columns || [],
-        columnNames: Object.values(colMap),
-        remarkColumnNames: remarkKeys.map(k => colMap[k] || k),
-        totalRows: (page.rows || []).length,
-        remarksFilled,
-        remarksEmpty,
-        rows: mappedRows
-      };
-    }).filter(p => p.totalRows > 0); // Only return pages that have data
+        let remarksFilled = 0;
+        let remarksEmpty = 0;
+
+        // Filter FIRST to avoid allocating millions of objects for empty rows
+        const rowsWithRemarksRaw = (page.rows || []).filter((row: any) => {
+          const hasRemarkText = remarkKeys.some(
+            (k) => row[k] && String(row[k]).trim() !== '',
+          );
+          const hasDisposition =
+            row.disposition && String(row.disposition).trim() !== '';
+
+          if (hasRemarkText || hasDisposition) {
+            remarksFilled++;
+            return true;
+          } else {
+            remarksEmpty++;
+            return false;
+          }
+        });
+
+        // Map ONLY the rows that have remarks to human-readable objects
+        const mappedRows = rowsWithRemarksRaw.map((row: any) => {
+          const readable: Record<string, any> = { _rowId: row.id };
+          Object.entries(row).forEach(([key, value]) => {
+            if (key === 'id') return;
+            if (key === 'disposition') {
+              readable.disposition = value;
+              return;
+            }
+            if (key === 'feedback_notes') {
+              readable.feedback_notes = value;
+              return;
+            }
+            const humanKey = colMap[key] || key; // fallback to raw key if no mapping
+            readable[humanKey] = value;
+          });
+          return readable;
+        });
+
+        return {
+          _id: page._id,
+          title: page.title,
+          teamName,
+          assignedTo,
+          createdAt: page.createdAt,
+          columns: page.columns || [],
+          columnNames: Object.values(colMap),
+          remarkColumnNames: remarkKeys.map((k) => colMap[k] || k),
+          totalRows: (page.rows || []).length,
+          remarksFilled,
+          remarksEmpty,
+          rows: mappedRows,
+        };
+      })
+      .filter((p) => p.totalRows > 0); // Only return pages that have data
   }
 }

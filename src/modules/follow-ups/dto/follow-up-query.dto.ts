@@ -6,10 +6,7 @@ import {
   IsOptional,
   IsString,
 } from 'class-validator';
-import {
-  FollowUpPriority,
-  FollowUpStatus,
-} from '../schemas/follow-up.schema';
+import { FollowUpPriority, FollowUpStatus } from '../schemas/follow-up.schema';
 
 export class FollowUpQueryDto {
   @ApiPropertyOptional({

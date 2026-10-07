@@ -9,7 +9,9 @@ describe('CampaignIntelligenceService', () => {
       providers: [CampaignIntelligenceService],
     }).compile();
 
-    service = module.get<CampaignIntelligenceService>(CampaignIntelligenceService);
+    service = module.get<CampaignIntelligenceService>(
+      CampaignIntelligenceService,
+    );
   });
 
   it('should be defined', () => {

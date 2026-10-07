@@ -4,10 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { FollowUpsController } from './follow-ups.controller';
 import { FollowUpsService } from './follow-ups.service';
 
-import {
-  FollowUp,
-  FollowUpSchema,
-} from './schemas/follow-up.schema';
+import { FollowUp, FollowUpSchema } from './schemas/follow-up.schema';
 
 @Module({
   imports: [

@@ -11,7 +11,9 @@ describe('CallDispositionsController', () => {
       providers: [CallDispositionsService],
     }).compile();
 
-    controller = module.get<CallDispositionsController>(CallDispositionsController);
+    controller = module.get<CallDispositionsController>(
+      CallDispositionsController,
+    );
   });
 
   it('should be defined', () => {

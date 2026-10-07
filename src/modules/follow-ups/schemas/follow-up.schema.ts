@@ -107,5 +107,4 @@ export class FollowUp {
   isDeleted: boolean;
 }
 
-export const FollowUpSchema =
-  SchemaFactory.createForClass(FollowUp);
+export const FollowUpSchema = SchemaFactory.createForClass(FollowUp);

@@ -11,7 +11,9 @@ describe('DocumentVerificationController', () => {
       providers: [DocumentVerificationService],
     }).compile();
 
-    controller = module.get<DocumentVerificationController>(DocumentVerificationController);
+    controller = module.get<DocumentVerificationController>(
+      DocumentVerificationController,
+    );
   });
 
   it('should be defined', () => {

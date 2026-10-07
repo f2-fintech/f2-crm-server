@@ -7,7 +7,10 @@ export class CreateTeamDto {
   @IsString()
   name: string;
 
-  @ApiProperty({ example: '64d23a1a1f0a1c1234567890', description: 'Manager User ID' })
+  @ApiProperty({
+    example: '64d23a1a1f0a1c1234567890',
+    description: 'Manager User ID',
+  })
   @IsNotEmpty()
   @IsMongoId()
   managerId: string;

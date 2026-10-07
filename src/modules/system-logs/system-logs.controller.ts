@@ -1,4 +1,12 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+} from '@nestjs/common';
 import { SystemLogsService } from './system-logs.service';
 import { CreateSystemLogDto } from './dto/create-system-log.dto';
 import { UpdateSystemLogDto } from './dto/update-system-log.dto';
@@ -23,7 +31,10 @@ export class SystemLogsController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateSystemLogDto: UpdateSystemLogDto) {
+  update(
+    @Param('id') id: string,
+    @Body() updateSystemLogDto: UpdateSystemLogDto,
+  ) {
     return this.systemLogsService.update(+id, updateSystemLogDto);
   }
 

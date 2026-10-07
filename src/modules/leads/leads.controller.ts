@@ -1,4 +1,12 @@
-import { Controller, Get, Post, Body, Query, Patch, Param } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Query,
+  Patch,
+  Param,
+} from '@nestjs/common';
 import { LeadsService } from './leads.service';
 import { CreateLeadDto } from './dto/create-lead.dto';
 
@@ -17,7 +25,10 @@ export class LeadsController {
   }
 
   @Patch(':id/documents')
-  addDocument(@Param('id') id: string, @Body() body: { type: string, url: string }) {
+  addDocument(
+    @Param('id') id: string,
+    @Body() body: { type: string; url: string },
+  ) {
     return this.leadsService.addDocument(id, body);
   }
 
@@ -39,8 +50,8 @@ export class LeadsController {
         performance: {
           todayLeads: 0,
           conversionRate: 0,
-        }
-      }
+        },
+      },
     };
   }
 }

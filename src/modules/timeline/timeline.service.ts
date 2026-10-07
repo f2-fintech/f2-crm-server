@@ -20,9 +20,7 @@ export class TimelineService {
   /**
    * Get All Timeline
    */
-  async findAll(
-    query: TimelineQueryDto,
-  ) {
+  async findAll(query: TimelineQueryDto) {
     const {
       page = 1,
       limit = 20,
@@ -34,25 +32,18 @@ export class TimelineService {
       sortOrder = 'desc',
     } = query;
 
-    const currentPage =
-      Number(page) || 1;
+    const currentPage = Number(page) || 1;
 
-    const pageSize =
-      Number(limit) || 20;
+    const pageSize = Number(limit) || 20;
 
-    const skip =
-      (currentPage - 1) * pageSize;
+    const skip = (currentPage - 1) * pageSize;
 
-    const filter: Record<
-      string,
-      any
-    > = {
+    const filter: Record<string, any> = {
       isDeleted: false,
     };
 
     if (entityType) {
-      filter.entityType =
-        entityType;
+      filter.entityType = entityType;
     }
 
     if (action) {
@@ -63,87 +54,59 @@ export class TimelineService {
       filter.createdAt = {};
 
       if (fromDate) {
-        filter.createdAt.$gte =
-          new Date(fromDate);
+        filter.createdAt.$gte = new Date(fromDate);
       }
 
       if (toDate) {
-        filter.createdAt.$lte =
-          new Date(toDate);
+        filter.createdAt.$lte = new Date(toDate);
       }
     }
 
-    const [
-      timeline,
-      total,
-    ] = await Promise.all([
+    const [timeline, total] = await Promise.all([
       this.timelineModel
         .find(filter)
-        .populate(
-          'performedBy',
-          'firstName lastName employeeId',
-        )
+        .populate('performedBy', 'firstName lastName employeeId')
         .sort({
-          [sortBy]:
-            sortOrder === 'asc'
-              ? 1
-              : -1,
+          [sortBy]: sortOrder === 'asc' ? 1 : -1,
         })
         .skip(skip)
         .limit(pageSize),
 
-      this.timelineModel.countDocuments(
-        filter,
-      ),
+      this.timelineModel.countDocuments(filter),
     ]);
 
     return {
       success: true,
-      message:
-        'Timeline fetched successfully.',
+      message: 'Timeline fetched successfully.',
       data: timeline,
       pagination: {
         total,
         page: currentPage,
         limit: pageSize,
-        totalPages: Math.ceil(
-          total / pageSize,
-        ),
-        hasNext:
-          currentPage *
-            pageSize <
-          total,
-        hasPrevious:
-          currentPage > 1,
+        totalPages: Math.ceil(total / pageSize),
+        hasNext: currentPage * pageSize < total,
+        hasPrevious: currentPage > 1,
       },
     };
   }
-    /**
+  /**
    * Get Lead Timeline
    */
-  async getLeadTimeline(
-    leadId: string,
-  ) {
-    const timeline =
-      await this.timelineModel
-        .find({
-          entityType:
-            TimelineType.LEAD,
-          entityId: leadId,
-          isDeleted: false,
-        })
-        .populate(
-          'performedBy',
-          'firstName lastName employeeId',
-        )
-        .sort({
-          createdAt: -1,
-        });
+  async getLeadTimeline(leadId: string) {
+    const timeline = await this.timelineModel
+      .find({
+        entityType: TimelineType.LEAD,
+        entityId: leadId,
+        isDeleted: false,
+      })
+      .populate('performedBy', 'firstName lastName employeeId')
+      .sort({
+        createdAt: -1,
+      });
 
     return {
       success: true,
-      message:
-        'Lead timeline fetched successfully.',
+      message: 'Lead timeline fetched successfully.',
       data: timeline,
     };
   }
@@ -151,29 +114,21 @@ export class TimelineService {
   /**
    * Get Customer Timeline
    */
-  async getCustomerTimeline(
-    customerId: string,
-  ) {
-    const timeline =
-      await this.timelineModel
-        .find({
-          entityType:
-            TimelineType.CUSTOMER,
-          entityId: customerId,
-          isDeleted: false,
-        })
-        .populate(
-          'performedBy',
-          'firstName lastName employeeId',
-        )
-        .sort({
-          createdAt: -1,
-        });
+  async getCustomerTimeline(customerId: string) {
+    const timeline = await this.timelineModel
+      .find({
+        entityType: TimelineType.CUSTOMER,
+        entityId: customerId,
+        isDeleted: false,
+      })
+      .populate('performedBy', 'firstName lastName employeeId')
+      .sort({
+        createdAt: -1,
+      });
 
     return {
       success: true,
-      message:
-        'Customer timeline fetched successfully.',
+      message: 'Customer timeline fetched successfully.',
       data: timeline,
     };
   }
@@ -181,33 +136,25 @@ export class TimelineService {
   /**
    * Get Application Timeline
    */
-  async getApplicationTimeline(
-    applicationId: string,
-  ) {
-    const timeline =
-      await this.timelineModel
-        .find({
-          entityType:
-            TimelineType.APPLICATION,
-          entityId: applicationId,
-          isDeleted: false,
-        })
-        .populate(
-          'performedBy',
-          'firstName lastName employeeId',
-        )
-        .sort({
-          createdAt: -1,
-        });
+  async getApplicationTimeline(applicationId: string) {
+    const timeline = await this.timelineModel
+      .find({
+        entityType: TimelineType.APPLICATION,
+        entityId: applicationId,
+        isDeleted: false,
+      })
+      .populate('performedBy', 'firstName lastName employeeId')
+      .sort({
+        createdAt: -1,
+      });
 
     return {
       success: true,
-      message:
-        'Application timeline fetched successfully.',
+      message: 'Application timeline fetched successfully.',
       data: timeline,
     };
   }
-    /**
+  /**
    * Dashboard Statistics
    */
   async getDashboardStats() {
@@ -239,17 +186,8 @@ export class TimelineService {
 
       this.timelineModel.countDocuments({
         createdAt: {
-          $gte: new Date(
-            new Date().setHours(0, 0, 0, 0),
-          ),
-          $lte: new Date(
-            new Date().setHours(
-              23,
-              59,
-              59,
-              999,
-            ),
-          ),
+          $gte: new Date(new Date().setHours(0, 0, 0, 0)),
+          $lte: new Date(new Date().setHours(23, 59, 59, 999)),
         },
         isDeleted: false,
       }),
@@ -257,8 +195,7 @@ export class TimelineService {
 
     return {
       success: true,
-      message:
-        'Timeline dashboard fetched successfully.',
+      message: 'Timeline dashboard fetched successfully.',
       data: {
         totalTimeline,
         leadTimeline,

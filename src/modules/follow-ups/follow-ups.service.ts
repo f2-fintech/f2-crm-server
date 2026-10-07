@@ -42,32 +42,23 @@ export class FollowUpsService {
       10,
     );
 
-    return `FUP${String(lastNumber + 1).padStart(
-      6,
-      '0',
-    )}`;
+    return `FUP${String(lastNumber + 1).padStart(6, '0')}`;
   }
 
   /**
    * Create Follow Up
    */
-  async create(
-    createFollowUpDto: CreateFollowUpDto,
-  ) {
-    const followUpId =
-      await this.generateFollowUpId();
+  async create(createFollowUpDto: CreateFollowUpDto) {
+    const followUpId = await this.generateFollowUpId();
 
     // Prevent duplicate follow-up on same Lead,
     // Date and Time
-    const exists =
-      await this.followUpModel.findOne({
-        leadId: createFollowUpDto.leadId,
-        followUpDate:
-          createFollowUpDto.followUpDate,
-        followUpTime:
-          createFollowUpDto.followUpTime,
-        isDeleted: false,
-      });
+    const exists = await this.followUpModel.findOne({
+      leadId: createFollowUpDto.leadId,
+      followUpDate: createFollowUpDto.followUpDate,
+      followUpTime: createFollowUpDto.followUpTime,
+      isDeleted: false,
+    });
 
     if (exists) {
       throw new ConflictException(
@@ -75,23 +66,21 @@ export class FollowUpsService {
       );
     }
 
-    const followUp =
-      new this.followUpModel({
-        ...createFollowUpDto,
-        followUpId,
-      });
+    const followUp = new this.followUpModel({
+      ...createFollowUpDto,
+      followUpId,
+    });
 
     await followUp.save();
 
     return {
       success: true,
-      message:
-        'Follow Up created successfully.',
+      message: 'Follow Up created successfully.',
       data: followUp,
     };
   }
 
-    /**
+  /**
    * Get All Follow Ups
    */
   async findAll(query: FollowUpQueryDto) {
@@ -140,30 +129,15 @@ export class FollowUpsService {
     const [followUps, total] = await Promise.all([
       this.followUpModel
         .find(filter)
-        .populate(
-          'leadId',
-          'leadId fullName mobile loanAmount'
-        )
-        .populate(
-          'customerId',
-          'customerId fullName phone'
-        )
+        .populate('leadId', 'leadId fullName mobile loanAmount')
+        .populate('customerId', 'customerId fullName phone')
         .populate(
           'applicationId',
-          'applicationId applicantName loanAmount status'
+          'applicationId applicantName loanAmount status',
         )
-        .populate(
-          'assignedTo',
-          'firstName lastName employeeId'
-        )
-        .populate(
-          'createdBy',
-          'firstName lastName employeeId'
-        )
-        .populate(
-          'updatedBy',
-          'firstName lastName employeeId'
-        )
+        .populate('assignedTo', 'firstName lastName employeeId')
+        .populate('createdBy', 'firstName lastName employeeId')
+        .populate('updatedBy', 'firstName lastName employeeId')
         .sort({
           [sortBy]: sortOrder === 'asc' ? 1 : -1,
         })
@@ -188,7 +162,7 @@ export class FollowUpsService {
     };
   }
 
-    /**
+  /**
    * Get Follow Up By Id
    */
   async findOne(id: string) {
@@ -197,35 +171,18 @@ export class FollowUpsService {
         _id: id,
         isDeleted: false,
       })
-      .populate(
-        'leadId',
-        'leadId fullName mobile loanAmount',
-      )
-      .populate(
-        'customerId',
-        'customerId fullName phone',
-      )
+      .populate('leadId', 'leadId fullName mobile loanAmount')
+      .populate('customerId', 'customerId fullName phone')
       .populate(
         'applicationId',
         'applicationId applicantName loanAmount status',
       )
-      .populate(
-        'assignedTo',
-        'firstName lastName employeeId',
-      )
-      .populate(
-        'createdBy',
-        'firstName lastName employeeId',
-      )
-      .populate(
-        'updatedBy',
-        'firstName lastName employeeId',
-      );
+      .populate('assignedTo', 'firstName lastName employeeId')
+      .populate('createdBy', 'firstName lastName employeeId')
+      .populate('updatedBy', 'firstName lastName employeeId');
 
     if (!followUp) {
-      throw new NotFoundException(
-        'Follow Up not found.',
-      );
+      throw new NotFoundException('Follow Up not found.');
     }
 
     return {
@@ -238,39 +195,25 @@ export class FollowUpsService {
   /**
    * Update Follow Up
    */
-  async update(
-    id: string,
-    updateFollowUpDto: UpdateFollowUpDto,
-  ) {
-    const followUp =
-      await this.followUpModel.findOne({
-        _id: id,
-        isDeleted: false,
-      });
+  async update(id: string, updateFollowUpDto: UpdateFollowUpDto) {
+    const followUp = await this.followUpModel.findOne({
+      _id: id,
+      isDeleted: false,
+    });
 
     if (!followUp) {
-      throw new NotFoundException(
-        'Follow Up not found.',
-      );
+      throw new NotFoundException('Follow Up not found.');
     }
 
     // Prevent duplicate follow-up
-    if (
-      updateFollowUpDto.followUpDate &&
-      updateFollowUpDto.followUpTime
-    ) {
-      const exists =
-        await this.followUpModel.findOne({
-          _id: { $ne: id },
-          leadId:
-            updateFollowUpDto.leadId ??
-            followUp.leadId,
-          followUpDate:
-            updateFollowUpDto.followUpDate,
-          followUpTime:
-            updateFollowUpDto.followUpTime,
-          isDeleted: false,
-        });
+    if (updateFollowUpDto.followUpDate && updateFollowUpDto.followUpTime) {
+      const exists = await this.followUpModel.findOne({
+        _id: { $ne: id },
+        leadId: updateFollowUpDto.leadId ?? followUp.leadId,
+        followUpDate: updateFollowUpDto.followUpDate,
+        followUpTime: updateFollowUpDto.followUpTime,
+        isDeleted: false,
+      });
 
       if (exists) {
         throw new ConflictException(
@@ -279,22 +222,20 @@ export class FollowUpsService {
       }
     }
 
-    const updatedFollowUp =
-      await this.followUpModel.findByIdAndUpdate(
-        id,
-        {
-          $set: updateFollowUpDto,
-        },
-        {
-          new: true,
-          runValidators: true,
-        },
-      );
+    const updatedFollowUp = await this.followUpModel.findByIdAndUpdate(
+      id,
+      {
+        $set: updateFollowUpDto,
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
 
     return {
       success: true,
-      message:
-        'Follow Up updated successfully.',
+      message: 'Follow Up updated successfully.',
       data: updatedFollowUp,
     };
   }
@@ -303,47 +244,35 @@ export class FollowUpsService {
    * Soft Delete Follow Up
    */
   async remove(id: string) {
-    const followUp =
-      await this.followUpModel.findOne({
-        _id: id,
-        isDeleted: false,
-      });
-
-    if (!followUp) {
-      throw new NotFoundException(
-        'Follow Up not found.',
-      );
-    }
-
-    await this.followUpModel.findByIdAndUpdate(
-      id,
-      {
-        isDeleted: true,
-      },
-    );
-
-    return {
-      success: true,
-      message:
-        'Follow Up deleted successfully.',
-    };
-  }
-    /**
-   * Change Follow Up Status
-   */
-  async changeStatus(
-    id: string,
-    status: FollowUpStatus,
-  ) {
     const followUp = await this.followUpModel.findOne({
       _id: id,
       isDeleted: false,
     });
 
     if (!followUp) {
-      throw new NotFoundException(
-        'Follow Up not found.',
-      );
+      throw new NotFoundException('Follow Up not found.');
+    }
+
+    await this.followUpModel.findByIdAndUpdate(id, {
+      isDeleted: true,
+    });
+
+    return {
+      success: true,
+      message: 'Follow Up deleted successfully.',
+    };
+  }
+  /**
+   * Change Follow Up Status
+   */
+  async changeStatus(id: string, status: FollowUpStatus) {
+    const followUp = await this.followUpModel.findOne({
+      _id: id,
+      isDeleted: false,
+    });
+
+    if (!followUp) {
+      throw new NotFoundException('Follow Up not found.');
     }
 
     followUp.status = status;
@@ -375,14 +304,8 @@ export class FollowUpsService {
         },
         isDeleted: false,
       })
-      .populate(
-        'leadId',
-        'leadId fullName mobile',
-      )
-      .populate(
-        'assignedTo',
-        'firstName lastName employeeId',
-      )
+      .populate('leadId', 'leadId fullName mobile')
+      .populate('assignedTo', 'firstName lastName employeeId')
       .sort({
         followUpTime: 1,
       });
@@ -407,14 +330,8 @@ export class FollowUpsService {
         },
         isDeleted: false,
       })
-      .populate(
-        'leadId',
-        'leadId fullName mobile',
-      )
-      .populate(
-        'assignedTo',
-        'firstName lastName employeeId',
-      )
+      .populate('leadId', 'leadId fullName mobile')
+      .populate('assignedTo', 'firstName lastName employeeId')
       .sort({
         followUpDate: 1,
       });
@@ -440,14 +357,8 @@ export class FollowUpsService {
         status: FollowUpStatus.PENDING,
         isDeleted: false,
       })
-      .populate(
-        'leadId',
-        'leadId fullName mobile',
-      )
-      .populate(
-        'assignedTo',
-        'firstName lastName employeeId',
-      )
+      .populate('leadId', 'leadId fullName mobile')
+      .populate('assignedTo', 'firstName lastName employeeId')
       .sort({
         followUpDate: 1,
       });

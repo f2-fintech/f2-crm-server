@@ -65,5 +65,4 @@ export class Note {
   isDeleted: boolean;
 }
 
-export const NoteSchema =
-  SchemaFactory.createForClass(Note);
+export const NoteSchema = SchemaFactory.createForClass(Note);

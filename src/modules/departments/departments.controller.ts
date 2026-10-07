@@ -14,17 +14,13 @@ import { UpdateDepartmentDto } from './dto/update-department.dto';
 
 @Controller('departments')
 export class DepartmentsController {
-  constructor(
-    private readonly departmentsService: DepartmentsService,
-  ) {}
+  constructor(private readonly departmentsService: DepartmentsService) {}
 
   /**
    * Create Department
    */
   @Post()
-  async create(
-    @Body() createDepartmentDto: CreateDepartmentDto,
-  ) {
+  async create(@Body() createDepartmentDto: CreateDepartmentDto) {
     return await this.departmentsService.create(createDepartmentDto);
   }
 
@@ -40,9 +36,7 @@ export class DepartmentsController {
    * Get Department By Id
    */
   @Get(':id')
-  async findOne(
-    @Param('id') id: string,
-  ) {
+  async findOne(@Param('id') id: string) {
     return await this.departmentsService.findOne(id);
   }
 
@@ -54,19 +48,14 @@ export class DepartmentsController {
     @Param('id') id: string,
     @Body() updateDepartmentDto: UpdateDepartmentDto,
   ) {
-    return await this.departmentsService.update(
-      id,
-      updateDepartmentDto,
-    );
+    return await this.departmentsService.update(id, updateDepartmentDto);
   }
 
   /**
    * Delete Department
    */
   @Delete(':id')
-  async remove(
-    @Param('id') id: string,
-  ) {
+  async remove(@Param('id') id: string) {
     return await this.departmentsService.remove(id);
   }
 }

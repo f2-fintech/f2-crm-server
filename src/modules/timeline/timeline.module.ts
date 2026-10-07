@@ -4,10 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { TimelineController } from './timeline.controller';
 import { TimelineService } from './timeline.service';
 
-import {
-  Timeline,
-  TimelineSchema,
-} from './schemas/timeline.schemas';
+import { Timeline, TimelineSchema } from './schemas/timeline.schemas';
 
 @Module({
   imports: [

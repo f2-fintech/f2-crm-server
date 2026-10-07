@@ -9,10 +9,12 @@ import * as bcrypt from 'bcrypt';
 
 async function bootstrap() {
   const app = await NestFactory.createApplicationContext(AppModule);
-  
+
   const leadModel = app.get<Model<Lead>>(getModelToken(Lead.name));
   const customerModel = app.get<Model<Customer>>(getModelToken(Customer.name));
-  const applicationModel = app.get<Model<Application>>(getModelToken(Application.name));
+  const applicationModel = app.get<Model<Application>>(
+    getModelToken(Application.name),
+  );
 
   console.log('🌱 Seeding database...');
 
@@ -45,7 +47,7 @@ async function bootstrap() {
       assignedTo: null,
       kycStatus: 'VERIFIED',
       monthlyIncome: 120000,
-    }
+    },
   ];
 
   const createdLeads = await leadModel.insertMany(leadsData);
@@ -70,7 +72,7 @@ async function bootstrap() {
       status: 'INACTIVE',
       source: 'Agent',
       kycStatus: 'VERIFIED',
-    }
+    },
   ];
 
   const createdCustomers = await customerModel.insertMany(customerData);
@@ -95,7 +97,7 @@ async function bootstrap() {
       loanType: 'Personal Loan',
       loanAmount: 200000,
       status: 'APPROVED',
-    }
+    },
   ];
 
   const createdApps = await applicationModel.insertMany(appsData);

@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Body, Param, Patch, Delete, UseGuards, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Patch,
+  Delete,
+  UseGuards,
+  Req,
+} from '@nestjs/common';
 import { NotionPagesService } from './notion-pages.service';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
@@ -84,7 +94,11 @@ export class NotionPagesController {
   }
 
   @Patch(':id')
-  updatePage(@Param('id') id: string, @Body() updateData: UpdateNotionPageDto, @Req() req: Request) {
+  updatePage(
+    @Param('id') id: string,
+    @Body() updateData: UpdateNotionPageDto,
+    @Req() req: Request,
+  ) {
     return this.pagesService.updatePage(id, updateData, req.user);
   }
 

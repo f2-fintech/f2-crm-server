@@ -4,10 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { DepartmentsController } from './departments.controller';
 import { DepartmentsService } from './departments.service';
 
-import {
-  Department,
-  DepartmentSchema,
-} from './schemas/department.schema';
+import { Department, DepartmentSchema } from './schemas/department.schema';
 
 @Module({
   imports: [

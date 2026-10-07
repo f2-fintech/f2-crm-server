@@ -17,9 +17,7 @@ import { NoteQueryDto } from './dto/note-query.dto';
 
 @Controller('notes')
 export class NotesController {
-  constructor(
-    private readonly notesService: NotesService,
-  ) {}
+  constructor(private readonly notesService: NotesService) {}
 
   /**
    * Create Note
@@ -29,9 +27,7 @@ export class NotesController {
     @Body()
     createNoteDto: CreateNoteDto,
   ) {
-    return this.notesService.create(
-      createNoteDto,
-    );
+    return this.notesService.create(createNoteDto);
   }
 
   /**
@@ -61,9 +57,7 @@ export class NotesController {
     @Param('leadId')
     leadId: string,
   ) {
-    return this.notesService.getLeadNotes(
-      leadId,
-    );
+    return this.notesService.getLeadNotes(leadId);
   }
 
   /**
@@ -88,10 +82,7 @@ export class NotesController {
     @Body()
     updateNoteDto: UpdateNoteDto,
   ) {
-    return this.notesService.update(
-      id,
-      updateNoteDto,
-    );
+    return this.notesService.update(id, updateNoteDto);
   }
 
   /**

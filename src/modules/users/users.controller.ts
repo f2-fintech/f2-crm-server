@@ -23,18 +23,14 @@ import { UpdateUserDto } from './dto/update-user.dto';
 @UseGuards(AuthGuard('jwt'), RolesGuard)
 @Controller('users')
 export class UsersController {
-  constructor(
-    private readonly usersService: UsersService,
-  ) {}
+  constructor(private readonly usersService: UsersService) {}
 
   /**
    * Create User
    */
   @Roles('SUPER_ADMIN', 'ADMIN')
   @Post()
-  async create(
-    @Body() createUserDto: CreateUserDto,
-  ) {
+  async create(@Body() createUserDto: CreateUserDto) {
     return await this.usersService.create(createUserDto);
   }
 
@@ -48,9 +44,7 @@ export class UsersController {
    */
   @Roles('SUPER_ADMIN', 'ADMIN')
   @Get(':id')
-  async findOne(
-    @Param('id') id: string,
-  ) {
+  async findOne(@Param('id') id: string) {
     return await this.usersService.findOne(id);
   }
 
@@ -59,14 +53,8 @@ export class UsersController {
    */
   @Roles('SUPER_ADMIN', 'ADMIN')
   @Patch(':id')
-  async update(
-    @Param('id') id: string,
-    @Body() updateUserDto: UpdateUserDto,
-  ) {
-    return await this.usersService.update(
-      id,
-      updateUserDto,
-    );
+  async update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
+    return await this.usersService.update(id, updateUserDto);
   }
 
   /**
@@ -74,9 +62,7 @@ export class UsersController {
    */
   @Roles('SUPER_ADMIN', 'ADMIN')
   @Delete(':id')
-  async remove(
-    @Param('id') id: string,
-  ) {
+  async remove(@Param('id') id: string) {
     return await this.usersService.remove(id);
   }
 }

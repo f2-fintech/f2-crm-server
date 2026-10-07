@@ -16,7 +16,10 @@ export class CampaignIntelligenceService {
     return `This action returns a #${id} campaignIntelligence`;
   }
 
-  update(id: number, updateCampaignIntelligenceDto: UpdateCampaignIntelligenceDto) {
+  update(
+    id: number,
+    updateCampaignIntelligenceDto: UpdateCampaignIntelligenceDto,
+  ) {
     return `This action updates a #${id} campaignIntelligence`;
   }
 

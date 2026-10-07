@@ -71,10 +71,7 @@ export class TeamsController {
   }
 
   @Post(':id/members/sync')
-  syncMembers(
-    @Param('id') id: string,
-    @Body() syncDto: SyncMembersDto,
-  ) {
+  syncMembers(@Param('id') id: string, @Body() syncDto: SyncMembersDto) {
     return this.teamsService.syncMembers(id, syncDto as any);
   }
 

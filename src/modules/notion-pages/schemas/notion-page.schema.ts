@@ -77,14 +77,14 @@ export class NotionPage {
     default: [],
   })
   sharedWith: MongooseSchema.Types.ObjectId[];
-  
+
   @Prop({
     type: MongooseSchema.Types.ObjectId,
     ref: 'User',
     default: null,
   })
   assignedMemberId: MongooseSchema.Types.ObjectId;
-  
+
   @Prop({
     default: false,
   })
@@ -104,21 +104,25 @@ export class NotionPage {
   deletedAt: Date;
 
   @Prop({
-    type: [{
-      assignedTo: { type: MongooseSchema.Types.ObjectId, ref: 'User' },
-      assignedBy: { type: MongooseSchema.Types.ObjectId, ref: 'User' },
-      assignedAt: { type: Date, default: Date.now }
-    }],
+    type: [
+      {
+        assignedTo: { type: MongooseSchema.Types.ObjectId, ref: 'User' },
+        assignedBy: { type: MongooseSchema.Types.ObjectId, ref: 'User' },
+        assignedAt: { type: Date, default: Date.now },
+      },
+    ],
     default: [],
   })
   assignmentLogs: any[];
 
   @Prop({
-    type: [{
-      updatedBy: { type: MongooseSchema.Types.ObjectId, ref: 'User' },
-      updatedAt: { type: Date, default: Date.now },
-      action: { type: String }
-    }],
+    type: [
+      {
+        updatedBy: { type: MongooseSchema.Types.ObjectId, ref: 'User' },
+        updatedAt: { type: Date, default: Date.now },
+        action: { type: String },
+      },
+    ],
     default: [],
   })
   updateLogs: any[];

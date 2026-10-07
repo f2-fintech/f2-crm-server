@@ -19,12 +19,15 @@ import { ApplicationsModule } from './modules/applications/applications.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { NotionPagesModule } from './modules/notion-pages/notion-pages.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { SlaConfigModule } from './modules/sla-config/sla-config.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { MailModule } from './modules/mail/mail.module';
 import { ChatModule } from './modules/chat/chat.module';
 import { TodosModule } from './modules/todos/todos.module';
 import { LeadsModule } from './modules/leads/leads.module';
 import { TimelineModule } from './modules/timeline/timeline.module';
+import { LifecycleEventsModule } from './modules/lifecycle-events/lifecycle-events.module';
+import { StageHistoryModule } from './modules/stage-history/stage-history.module';
 
 @Module({
   imports: [
@@ -62,12 +65,15 @@ import { TimelineModule } from './modules/timeline/timeline.module';
     AttendanceModule,
     NotionPagesModule,
     DashboardModule,
+    SlaConfigModule,
     NotificationsModule,
     MailModule,
     ChatModule,
     TodosModule,
     LeadsModule,
     TimelineModule,
+    LifecycleEventsModule,
+    StageHistoryModule,
   ],
   controllers: [AppController],
   providers: [AppService],

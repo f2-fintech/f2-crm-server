@@ -114,5 +114,4 @@ export class Activity {
   isDeleted: boolean;
 }
 
-export const ActivitySchema =
-  SchemaFactory.createForClass(Activity);
+export const ActivitySchema = SchemaFactory.createForClass(Activity);
