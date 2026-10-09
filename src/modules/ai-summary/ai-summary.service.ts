@@ -1,26 +1,52 @@
-import { Injectable } from '@nestjs/common';
-import { CreateAiSummaryDto } from './dto/create-ai-summary.dto';
-import { UpdateAiSummaryDto } from './dto/update-ai-summary.dto';
+import { Injectable, NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { LeadsService } from '../leads/leads.service';
 
 @Injectable()
 export class AiSummaryService {
-  create(createAiSummaryDto: CreateAiSummaryDto) {
-    return 'This action adds a new aiSummary';
+  private genAI: GoogleGenerativeAI;
+
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly leadsService: LeadsService,
+  ) {
+    const apiKey = this.configService.get<string>('GEMINI_API_KEY');
+    if (apiKey) {
+      this.genAI = new GoogleGenerativeAI(apiKey);
+    }
   }
 
-  findAll() {
-    return `This action returns all aiSummary`;
-  }
+  async getLeadSummary(leadId: string): Promise<{ summary: string }> {
+    if (!this.genAI) {
+      return { summary: 'Gemini API key is missing. Please configure GEMINI_API_KEY in your .env file to enable free AI summaries.' };
+    }
 
-  findOne(id: number) {
-    return `This action returns a #${id} aiSummary`;
-  }
+    try {
+      const lead = await this.leadsService.findOne(leadId);
+      if (!lead) {
+        throw new NotFoundException(`Lead with ID ${leadId} not found`);
+      }
 
-  update(id: number, updateAiSummaryDto: UpdateAiSummaryDto) {
-    return `This action updates a #${id} aiSummary`;
-  }
+      const prompt = `You are an expert CRM assistant. Please summarize the following lead's information in 3 concise bullet points and suggest the next best action.
+      
+      Lead Name: ${lead.fullName}
+      Email: ${lead.email}
+      Phone: ${lead.phone}
+      Status: ${lead.status}
+      Source: ${lead.leadSource}
+      City: ${lead.city || 'N/A'}
+      
+      Please format the response as markdown.`;
 
-  remove(id: number) {
-    return `This action removes a #${id} aiSummary`;
+      const model = this.genAI.getGenerativeModel({ model: "gemini-pro" });
+      const result = await model.generateContent(prompt);
+      const summary = result.response.text() || 'Unable to generate summary.';
+      
+      return { summary };
+    } catch (error: any) {
+      console.error('Error generating AI summary:', error);
+      throw new InternalServerErrorException(error?.message || 'Failed to generate AI summary');
+    }
   }
 }

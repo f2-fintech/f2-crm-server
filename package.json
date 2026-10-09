@@ -20,6 +20,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@nestjs-modules/mailer": "^2.3.7",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.4",
@@ -43,6 +44,7 @@
     "multer": "^2.2.0",
     "nest-winston": "^1.10.2",
     "nodemailer": "^10.0.10",
+    "openai": "^7.31.0",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pug": "^3.0.4",

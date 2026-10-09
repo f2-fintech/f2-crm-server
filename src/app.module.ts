@@ -28,6 +28,7 @@ import { LeadsModule } from './modules/leads/leads.module';
 import { TimelineModule } from './modules/timeline/timeline.module';
 import { LifecycleEventsModule } from './modules/lifecycle-events/lifecycle-events.module';
 import { StageHistoryModule } from './modules/stage-history/stage-history.module';
+import { AiSummaryModule } from './modules/ai-summary/ai-summary.module';
 
 @Module({
   imports: [
@@ -74,6 +75,7 @@ import { StageHistoryModule } from './modules/stage-history/stage-history.module
     TimelineModule,
     LifecycleEventsModule,
     StageHistoryModule,
+    AiSummaryModule,
   ],
   controllers: [AppController],
   providers: [AppService],

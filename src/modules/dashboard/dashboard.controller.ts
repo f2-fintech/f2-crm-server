@@ -45,4 +45,9 @@ export class DashboardController {
   async getSlaOverview() {
     return await this.dashboardService.getSlaOverview();
   }
+
+  @Get('volume-forecast')
+  async getVolumeForecast() {
+    return await this.dashboardService.getVolumeForecast();
+  }
 }

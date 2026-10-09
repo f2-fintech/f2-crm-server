@@ -18,5 +18,6 @@ import { LifecycleEventsModule } from '../lifecycle-events/lifecycle-events.modu
   ],
   controllers: [LeadsController],
   providers: [LeadsService],
+  exports: [LeadsService],
 })
 export class LeadsModule {}

@@ -6,6 +6,7 @@ import {
   Query,
   Patch,
   Param,
+  Delete,
 } from '@nestjs/common';
 import { LeadsService } from './leads.service';
 import { CreateLeadDto } from './dto/create-lead.dto';
@@ -24,6 +25,21 @@ export class LeadsController {
     return this.leadsService.findAll(query);
   }
 
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.leadsService.findOne(id);
+  }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() updateLeadDto: any) {
+    return this.leadsService.update(id, updateLeadDto);
+  }
+
+  @Delete(':id')
+  remove(@Param('id') id: string) {
+    return this.leadsService.remove(id);
+  }
+
   @Patch(':id/documents')
   addDocument(
     @Param('id') id: string,
@@ -39,5 +55,10 @@ export class LeadsController {
   @Get('dashboard/stats')
   getDashboardStats() {
     return this.leadsService.getDashboardStats();
+  }
+
+  @Post('sync-oms')
+  syncOmsLeads() {
+    return this.leadsService.syncOmsLeads();
   }
 }
