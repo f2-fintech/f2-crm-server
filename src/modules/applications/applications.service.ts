@@ -353,6 +353,17 @@ export class ApplicationsService {
 
     await application.save();
 
+    await this.lifecycleEventsService.transitionStage({
+      entityType: 'Application',
+      entityId: application._id.toString(),
+      applicationId: application._id.toString(),
+      leadId: application.leadId,
+      customerId: application.customerId,
+      eventType: LifecycleEventType.APPLICATION_ASSIGNED,
+      toStage: application.status,
+      source: LifecycleEventSource.CRM,
+    });
+
     return {
       success: true,
       message: 'Application assigned successfully.',
@@ -466,12 +477,17 @@ export class ApplicationsService {
   /**
    * Sync Applications from OMS
    */
-  async syncOmsApplications() {
+  async syncOmsApplications(startDate?: string, endDate?: string) {
     const OMS_BASE_URL = process.env.OMS_BASE_URL || 'https://admin.f2fintech.in';
     const OMS_COMPANY_ID = process.env.OMS_COMPANY_ID || '101';
     
     try {
-      const response = await fetch(`${OMS_BASE_URL}/api/v1/get-customer-loan-applications?companyId=${OMS_COMPANY_ID}`, {
+      let url = `${OMS_BASE_URL}/api/v1/get-customer-loan-applications?companyId=${OMS_COMPANY_ID}`;
+      if (startDate && endDate) {
+        url += `&startDate=${startDate}&endDate=${endDate}`;
+      }
+
+      const response = await fetch(url, {
         headers: { 'companyid': OMS_COMPANY_ID }
       });
 

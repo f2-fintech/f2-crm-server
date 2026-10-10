@@ -33,7 +33,7 @@ export class LeadsService {
     @InjectModel(Timeline.name) private timelineModel: Model<TimelineDocument>,
     @InjectModel(Customer.name) private customerModel: Model<CustomerDocument>,
     private readonly lifecycleEventsService: LifecycleEventsService,
-  ) {}
+  ) { }
 
   async create(createLeadDto: CreateLeadDto, userId?: any): Promise<Lead> {
     const leadId = 'L' + Date.now().toString();
@@ -71,17 +71,84 @@ export class LeadsService {
   }
 
   async findAll(query: any): Promise<any> {
-    const { page = 1, limit = 10 } = query;
+    const { page = 1, limit = 10, isAssigned, search, status, isDoctor } = query;
     const skip = (page - 1) * limit;
 
+    const filter: any = { isDeleted: false };
+
+    // Safer search filter combination
+    const finalFilter: any = { isDeleted: false };
+    const andConditions: any[] = [];
+
+    if (isAssigned === 'true') {
+      andConditions.push({ $or: [{ assignedTo: { $exists: true, $ne: null } }, { omsUserId: { $exists: true, $ne: null } }, { omsAppliedByName: { $exists: true, $ne: '' } }] });
+    } else if (isAssigned === 'false') {
+      andConditions.push({ $and: [{ assignedTo: { $exists: false } }, { omsUserId: null }, { $or: [{ omsAppliedByName: { $exists: false } }, { omsAppliedByName: '' }] }] });
+    }
+
+    if (isDoctor === 'true') {
+      andConditions.push({
+        $or: [
+          { fullName: { $regex: '^dr\\.?\\s', $options: 'i' } },
+          { loanType: { $regex: 'doctor', $options: 'i' } },
+          { omsLeadType: { $regex: 'doctor', $options: 'i' } }
+        ]
+      });
+    }
+
+    if (search) {
+      andConditions.push({
+        $or: [
+          { fullName: new RegExp(search, 'i') },
+          { email: new RegExp(search, 'i') },
+          { phone: new RegExp(search, 'i') },
+          { loanType: new RegExp(search, 'i') },
+          { omsLeadType: new RegExp(search, 'i') }
+        ]
+      });
+    }
+
+    if (status) {
+      if (['APPROVED', 'REJECTED', 'DISBURSED'].includes(status.toUpperCase())) {
+        andConditions.push({ omsTicketStatus: { $regex: status, $options: 'i' } });
+      } else if (status === 'FOLLOW_UP') {
+        andConditions.push({ status: { $nin: [LeadStatus.CONVERTED, LeadStatus.LOST] } });
+      } else {
+        andConditions.push({ status });
+      }
+    }
+
+    if (andConditions.length > 0) {
+      finalFilter.$and = andConditions;
+    }
+
+    const parsedLimit = Number(limit) || 10;
+    const parsedSkip = Number(skip) || 0;
+
     const [data, total] = await Promise.all([
-      this.leadModel
-        .find({ isDeleted: false })
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .exec(),
-      this.leadModel.countDocuments({ isDeleted: false }),
+      this.leadModel.aggregate([
+        { $match: finalFilter },
+        { $sort: { createdAt: -1 } },
+        { $skip: parsedSkip },
+        { $limit: parsedLimit },
+        {
+          $lookup: {
+            from: "timelines", // Name of the timelines collection
+            localField: "_id",
+            foreignField: "entityId",
+            as: "timelineItems"
+          }
+        },
+        {
+          $addFields: {
+            touchpointsCount: { $size: "$timelineItems" },
+            latestTimelineItem: { $arrayElemAt: ["$timelineItems", -1] },
+            id: { $toString: "$_id" }
+          }
+        },
+        { $project: { timelineItems: 0 } }
+      ]),
+      this.leadModel.countDocuments(finalFilter),
     ]);
 
     return {
@@ -180,13 +247,15 @@ export class LeadsService {
   }
 
   async getDashboardStats(): Promise<any> {
-    const [totalLeads, convertedLeads, rejectedLeads, activeLeads, newLeads] = await Promise.all([
+    const [totalLeads, convertedLeads, approvedLeads, rejectedLeads, disbursedLeads, activeLeads, newLeads] = await Promise.all([
       this.leadModel.countDocuments({ isDeleted: false }),
       this.leadModel.countDocuments({ isDeleted: false, status: LeadStatus.CONVERTED }),
-      this.leadModel.countDocuments({ isDeleted: false, status: LeadStatus.LOST }),
-      this.leadModel.countDocuments({ 
-        isDeleted: false, 
-        status: { $nin: [LeadStatus.CONVERTED, LeadStatus.LOST] } 
+      this.leadModel.countDocuments({ isDeleted: false, omsTicketStatus: { $regex: 'approved', $options: 'i' } }),
+      this.leadModel.countDocuments({ isDeleted: false, omsTicketStatus: { $regex: 'rejected', $options: 'i' } }),
+      this.leadModel.countDocuments({ isDeleted: false, omsTicketStatus: { $regex: 'disbursed', $options: 'i' } }),
+      this.leadModel.countDocuments({
+        isDeleted: false,
+        status: { $nin: [LeadStatus.CONVERTED, LeadStatus.LOST] }
       }),
       this.leadModel.countDocuments({ isDeleted: false, status: LeadStatus.NEW })
     ]);
@@ -196,13 +265,13 @@ export class LeadsService {
       { $match: { isDeleted: false } },
       { $group: { _id: '$leadSource', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
-      { $limit: 3 }
+      { $limit: 100 }
     ]);
 
     // Active aging > 14 days
     const twoWeeksAgo = new Date();
     twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
-    
+
     const inactiveLeads = await this.leadModel.countDocuments({
       isDeleted: false,
       status: { $nin: [LeadStatus.CONVERTED, LeadStatus.LOST] },
@@ -210,7 +279,7 @@ export class LeadsService {
     });
 
     const insights: Insight[] = [];
-    
+
     if (inactiveLeads > 0) {
       insights.push({
         title: "Idle Leads",
@@ -231,13 +300,38 @@ export class LeadsService {
     }
 
     if (sourceStats.length > 0) {
-      const topSource = sourceStats[0];
-      insights.push({
-        title: "Top Lead Source",
-        metric: topSource._id || "Unknown",
-        explanation: `Highest volume source with ${topSource.count} leads generated.`,
-        severity: "info"
-      });
+      // Find specific sources (case insensitive check)
+      const dialerSource = sourceStats.find(s => String(s._id).toLowerCase() === 'dialler' || String(s._id).toLowerCase() === 'dialer');
+      const notionSource = sourceStats.find(s => String(s._id).toLowerCase() === 'notion');
+
+      if (dialerSource) {
+        insights.push({
+          title: "Dialer Leads",
+          metric: dialerSource.count,
+          explanation: `Leads generated through the dialer integration.`,
+          severity: "info"
+        });
+      }
+
+      if (notionSource) {
+        insights.push({
+          title: "Notion Leads",
+          metric: notionSource.count,
+          explanation: `Leads captured via Notion.`,
+          severity: "info"
+        });
+      }
+
+      // If neither exists but we still have a top source, show it
+      if (!dialerSource && !notionSource) {
+        const topSource = sourceStats[0];
+        insights.push({
+          title: "Top Lead Source",
+          metric: topSource._id || "Unknown",
+          explanation: `Highest volume source with ${topSource.count} leads generated.`,
+          severity: "info"
+        });
+      }
     }
 
     let conversionRate = 0;
@@ -253,14 +347,43 @@ export class LeadsService {
       }
     }
 
+    const doctorLeadsList = await this.leadModel.find({
+      isDeleted: false,
+      $or: [
+        { loanType: { $regex: 'doctor', $options: 'i' } },
+        { omsLeadType: { $regex: 'doctor', $options: 'i' } }
+      ]
+    });
+
+    let doctorApproved = 0;
+    let doctorRejected = 0;
+    let doctorDisbursed = 0;
+    let doctorPending = 0;
+
+    doctorLeadsList.forEach(lead => {
+      const s = (lead.omsTicketStatus || '').toLowerCase();
+      if (s.includes('disburse')) doctorDisbursed++;
+      else if (s.includes('approv')) doctorApproved++;
+      else if (s.includes('reject')) doctorRejected++;
+      else doctorPending++;
+    });
+
     return {
       success: true,
       data: {
         overview: {
           totalLeads,
-          approvedLeads: convertedLeads,
+          approvedLeads,
           rejectedLeads,
+          disbursedLeads,
           followUpLeads: activeLeads,
+        },
+        doctorStats: {
+          total: doctorLeadsList.length,
+          approved: doctorApproved,
+          rejected: doctorRejected,
+          disbursed: doctorDisbursed,
+          pending: doctorPending
         },
         performance: {
           todayLeads: newLeads,
@@ -285,15 +408,37 @@ export class LeadsService {
     );
     if (!lead) throw new NotFoundException('Lead not found');
 
-    await this.timelineModel.create({
-      timelineId: 'T' + Date.now().toString(),
-      entityType: TimelineType.LEAD,
-      entityId: lead._id,
-      action: TimelineAction.UPDATED,
-      title: 'Lead Updated',
-      description: 'Lead details were updated',
-      performedBy: userId,
-    });
+    if (updateData.assignedTo) {
+      await this.timelineModel.create({
+        timelineId: 'T' + Date.now().toString(),
+        entityType: TimelineType.LEAD,
+        entityId: lead._id,
+        action: TimelineAction.ASSIGNED,
+        title: 'Lead Assigned',
+        description: `Lead was assigned to a team member.`,
+        performedBy: userId,
+      });
+
+      await this.lifecycleEventsService.transitionStage({
+        entityType: 'Lead',
+        entityId: lead._id.toString(),
+        leadId: lead._id.toString(),
+        eventType: LifecycleEventType.LEAD_ASSIGNED,
+        toStage: lead.status,
+        performedBy: userId,
+        source: LifecycleEventSource.CRM,
+      });
+    } else {
+      await this.timelineModel.create({
+        timelineId: 'T' + Date.now().toString(),
+        entityType: TimelineType.LEAD,
+        entityId: lead._id,
+        action: TimelineAction.UPDATED,
+        title: 'Lead Updated',
+        description: 'Lead details were updated',
+        performedBy: userId,
+      });
+    }
 
     return lead;
   }
@@ -323,12 +468,17 @@ export class LeadsService {
    * Sync Leads from OMS automatically every 5 minutes
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
-  async syncOmsLeads() {
+  async syncOmsLeads(startDate?: string, endDate?: string) {
     const OMS_BASE_URL = process.env.OMS_BASE_URL || 'https://admin.f2fintech.in';
     const OMS_COMPANY_ID = process.env.OMS_COMPANY_ID || '101';
-    
+
     try {
-      const response = await fetch(`${OMS_BASE_URL}/api/v1/get-customer-loan-applications?companyId=${OMS_COMPANY_ID}`, {
+      let url = `${OMS_BASE_URL}/api/v1/get-all-tickets?companyId=${OMS_COMPANY_ID}&page=1&limit=1000`;
+      if (startDate && endDate) {
+        url += `&startDate=${startDate}&endDate=${endDate}`;
+      }
+
+      const response = await fetch(url, {
         headers: { 'companyid': OMS_COMPANY_ID }
       });
 
@@ -350,10 +500,20 @@ export class LeadsService {
         }
 
         const existingLead = await this.leadModel.findOne({ phone, isDeleted: false });
-        
+
+        const omsTicketStatus = item.ticketStatus || item.loanStatus || '';
+        const omsApprovedAmount = parseFloat(item.approvedAmount) || 0;
+        const omsDisbursedAmount = parseFloat(item.disbursedAmount) || 0;
+        const omsUserId = item.user_id || null;
+        const omsTicketId = item.ticketId || item.ticket_id || null;
+        const omsAppliedByName = item.appliedByName || '';
+        const omsProvider = item.applicationProvider || item.provider || '';
+        const omsTenure = parseInt(item.applicationTenure) || 0;
+        const omsLeadType = item.leadType || '';
+
         if (!existingLead) {
           const leadId = 'L' + Date.now().toString() + Math.floor(Math.random() * 1000);
-          
+
           const newLead = new this.leadModel({
             leadId,
             fullName: item.customerName || 'Unknown OMS Lead',
@@ -364,6 +524,15 @@ export class LeadsService {
             loanAmount: parseFloat(item.applicationAmount) || 0,
             leadSource: item.leadType || item.source || 'OMS',
             status: LeadStatus.NEW,
+            omsTicketStatus,
+            omsApprovedAmount,
+            omsDisbursedAmount,
+            omsUserId,
+            omsTicketId,
+            omsAppliedByName,
+            omsProvider,
+            omsTenure,
+            omsLeadType
           });
 
           await newLead.save();
@@ -374,7 +543,7 @@ export class LeadsService {
             entityId: newLead._id,
             action: TimelineAction.CREATED,
             title: 'Lead Synced from OMS',
-            description: `Lead created via OMS Sync from application ${item.applicationId}`,
+            description: `Lead created via OMS Sync from ticket ${item.ticketId || item.applicationId}`,
             metadata: { omsApplicationId: item.applicationId, source: 'OMS' },
           });
 
@@ -388,8 +557,28 @@ export class LeadsService {
             omsId: String(item.applicationId),
           });
 
+          if (item.ticketId) {
+            await this.syncTicketHistory(item.ticketId, newLead._id, OMS_BASE_URL, OMS_COMPANY_ID);
+          }
+
           created++;
         } else {
+          // Update existing lead with latest OMS ticket status
+          existingLead.omsTicketStatus = omsTicketStatus;
+          existingLead.omsApprovedAmount = omsApprovedAmount;
+          existingLead.omsDisbursedAmount = omsDisbursedAmount;
+          existingLead.omsUserId = omsUserId;
+          existingLead.omsTicketId = omsTicketId;
+          if (omsAppliedByName) existingLead.omsAppliedByName = omsAppliedByName;
+          existingLead.omsProvider = omsProvider;
+          existingLead.omsTenure = omsTenure;
+          existingLead.omsLeadType = omsLeadType;
+          await existingLead.save();
+
+          if (item.ticketId) {
+            await this.syncTicketHistory(item.ticketId, existingLead._id, OMS_BASE_URL, OMS_COMPANY_ID);
+          }
+
           skipped++;
         }
       }
@@ -398,6 +587,36 @@ export class LeadsService {
     } catch (err: any) {
       console.error(`Failed to sync OMS leads: ${err.message}`);
       return { success: false, message: err.message };
+    }
+  }
+
+  private async syncTicketHistory(ticketId: number, leadId: any, OMS_BASE_URL: string, OMS_COMPANY_ID: string) {
+    try {
+      const res = await fetch(`${OMS_BASE_URL}/api/v1/get-ticket-histories/${ticketId}`, {
+        headers: { 'companyid': OMS_COMPANY_ID }
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      const histories = json?.data || [];
+
+      for (const hist of histories) {
+        if (!hist.id) continue;
+        const exists = await this.timelineModel.findOne({ 'metadata.omsHistoryId': hist.id });
+        if (!exists) {
+          await this.timelineModel.create({
+            timelineId: 'T' + Date.now().toString() + Math.floor(Math.random() * 1000),
+            entityType: TimelineType.LEAD,
+            entityId: leadId,
+            action: TimelineAction.ACTIVITY,
+            title: 'OMS Action',
+            description: hist.action || 'Ticket updated',
+            metadata: { omsHistoryId: hist.id, source: 'OMS' },
+            createdAt: hist.created_at ? new Date(hist.created_at) : new Date(),
+          } as any);
+        }
+      }
+    } catch (err) {
+      console.error(`Failed to sync history for ticket ${ticketId}`, err);
     }
   }
 }

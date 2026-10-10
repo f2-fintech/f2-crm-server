@@ -25,8 +25,8 @@ export class ApplicationsController {
   @ApiOperation({
     summary: 'Manually sync applications from OMS',
   })
-  syncOmsApplications() {
-    return this.applicationsService.syncOmsApplications();
+  syncOmsApplications(@Body() body: { startDate?: string; endDate?: string }) {
+    return this.applicationsService.syncOmsApplications(body?.startDate, body?.endDate);
   }
 
   @Post()

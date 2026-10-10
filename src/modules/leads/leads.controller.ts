@@ -58,7 +58,29 @@ export class LeadsController {
   }
 
   @Post('sync-oms')
-  syncOmsLeads() {
-    return this.leadsService.syncOmsLeads();
+  syncOmsLeads(@Body() body: { startDate?: string; endDate?: string }) {
+    return this.leadsService.syncOmsLeads(body?.startDate, body?.endDate);
+  }
+
+  @Get('oms/history/:ticketId')
+  async getOmsHistory(@Param('ticketId') ticketId: string) {
+    try {
+      const response = await fetch(`https://admin.f2fintech.in/api/v1/get-ticket-histories/${ticketId}`);
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
+  }
+
+  @Get('oms/detail/:ticketId')
+  async getOmsDetail(@Param('ticketId') ticketId: string) {
+    try {
+      const response = await fetch(`https://admin.f2fintech.in/api/v1/get-ticket-with-detail/${ticketId}`);
+      const data = await response.json();
+      return data;
+    } catch (error) {
+      return { success: false, message: error.message };
+    }
   }
 }
