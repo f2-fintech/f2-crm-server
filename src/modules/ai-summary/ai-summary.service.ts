@@ -39,7 +39,7 @@ export class AiSummaryService {
       
       Please format the response as markdown.`;
 
-      const model = this.genAI.getGenerativeModel({ model: "gemini-pro" });
+      const model = this.genAI.getGenerativeModel({ model: "gemini-3.8-flash" });
       const result = await model.generateContent(prompt);
       const summary = result.response.text() || 'Unable to generate summary.';
       

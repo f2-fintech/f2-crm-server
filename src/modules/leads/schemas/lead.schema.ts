@@ -57,6 +57,34 @@ export class Lead {
   @Prop({ type: String, enum: LeadStatus, default: LeadStatus.NEW })
   status: LeadStatus;
 
+  // --- OMS Ticket Data ---
+  @Prop({ default: null })
+  omsTicketId: number;
+
+  @Prop({ default: '' })
+  omsTicketStatus: string;
+
+  @Prop({ default: 0 })
+  omsApprovedAmount: number;
+
+  @Prop({ default: 0 })
+  omsDisbursedAmount: number;
+
+  @Prop({ default: null })
+  omsUserId: number;
+
+  @Prop({ default: '' })
+  omsAppliedByName: string;
+
+  @Prop({ default: '' })
+  omsProvider: string;
+
+  @Prop({ default: 0 })
+  omsTenure: number;
+
+  @Prop({ default: '' })
+  omsLeadType: string;
+
   @Prop({ type: String, enum: KycStatus, default: KycStatus.PENDING })
   kycStatus: KycStatus;
 
