@@ -71,19 +71,32 @@ export class LeadsService {
   }
 
   async findAll(query: any): Promise<any> {
-    const { page = 1, limit = 10, isAssigned, search, status, isDoctor } = query;
+    const {
+      page = 1,
+      limit = 10,
+      isAssigned,
+      assignedTo,
+      search,
+      status,
+      isDoctor,
+      leadSource,
+      priority,
+      city,
+      loanType,
+      fromDate,
+      toDate,
+    } = query;
     const skip = (page - 1) * limit;
 
-    const filter: any = { isDeleted: false };
-
-    // Safer search filter combination
     const finalFilter: any = { isDeleted: false };
     const andConditions: any[] = [];
 
-    if (isAssigned === 'true') {
+    if (isAssigned === 'true' || assignedTo === 'assigned') {
       andConditions.push({ $or: [{ assignedTo: { $exists: true, $ne: null } }, { omsUserId: { $exists: true, $ne: null } }, { omsAppliedByName: { $exists: true, $ne: '' } }] });
-    } else if (isAssigned === 'false') {
+    } else if (isAssigned === 'false' || assignedTo === 'unassigned') {
       andConditions.push({ $and: [{ assignedTo: { $exists: false } }, { omsUserId: null }, { $or: [{ omsAppliedByName: { $exists: false } }, { omsAppliedByName: '' }] }] });
+    } else if (assignedTo && assignedTo !== 'all') {
+      andConditions.push({ assignedTo });
     }
 
     if (isDoctor === 'true') {
@@ -108,14 +121,70 @@ export class LeadsService {
       });
     }
 
-    if (status) {
-      if (['APPROVED', 'REJECTED', 'DISBURSED'].includes(status.toUpperCase())) {
+    if (status && status.toUpperCase() !== 'ALL') {
+      const upper = status.toUpperCase();
+      if (['APPROVED', 'REJECTED', 'DISBURSED'].includes(upper)) {
         andConditions.push({ omsTicketStatus: { $regex: status, $options: 'i' } });
-      } else if (status === 'FOLLOW_UP') {
+      } else if (upper === 'FOLLOW_UP') {
         andConditions.push({ status: { $nin: [LeadStatus.CONVERTED, LeadStatus.LOST] } });
+      } else if (upper === 'NOTION') {
+        andConditions.push({
+          $or: [
+            { leadSource: { $regex: 'notion', $options: 'i' } },
+            { omsLeadType: { $regex: 'notion', $options: 'i' } }
+          ]
+        });
+      } else if (upper === 'DIALER' || upper === 'DIALLER') {
+        andConditions.push({
+          $or: [
+            { leadSource: { $regex: 'diall?er', $options: 'i' } },
+            { omsLeadType: { $regex: 'diall?er', $options: 'i' } }
+          ]
+        });
       } else {
         andConditions.push({ status });
       }
+    }
+
+    if (leadSource && leadSource.toUpperCase() !== 'ALL') {
+      andConditions.push({
+        $or: [
+          { leadSource: { $regex: leadSource, $options: 'i' } },
+          { omsLeadType: { $regex: leadSource, $options: 'i' } }
+        ]
+      });
+    }
+
+    if (priority && priority.toUpperCase() !== 'ALL') {
+      andConditions.push({ priority });
+    }
+
+    if (city) {
+      andConditions.push({ city: { $regex: city, $options: 'i' } });
+    }
+
+    if (loanType) {
+      andConditions.push({ loanType: { $regex: loanType, $options: 'i' } });
+    }
+
+    if (query.omsAppliedByName) {
+      andConditions.push({
+        $or: [
+          { omsAppliedByName: { $regex: query.omsAppliedByName, $options: 'i' } },
+          { leadSource: { $regex: query.omsAppliedByName, $options: 'i' } }
+        ]
+      });
+    }
+
+    if (fromDate || toDate) {
+      const dateFilter: any = {};
+      if (fromDate) dateFilter.$gte = new Date(fromDate);
+      if (toDate) {
+        const to = new Date(toDate);
+        to.setHours(23, 59, 59, 999);
+        dateFilter.$lte = to;
+      }
+      andConditions.push({ createdAt: dateFilter });
     }
 
     if (andConditions.length > 0) {
@@ -247,7 +316,17 @@ export class LeadsService {
   }
 
   async getDashboardStats(): Promise<any> {
-    const [totalLeads, convertedLeads, approvedLeads, rejectedLeads, disbursedLeads, activeLeads, newLeads] = await Promise.all([
+    const [
+      totalLeads,
+      convertedLeads,
+      approvedLeads,
+      rejectedLeads,
+      disbursedLeads,
+      activeLeads,
+      newLeads,
+      dialerCount,
+      notionCount
+    ] = await Promise.all([
       this.leadModel.countDocuments({ isDeleted: false }),
       this.leadModel.countDocuments({ isDeleted: false, status: LeadStatus.CONVERTED }),
       this.leadModel.countDocuments({ isDeleted: false, omsTicketStatus: { $regex: 'approved', $options: 'i' } }),
@@ -257,7 +336,21 @@ export class LeadsService {
         isDeleted: false,
         status: { $nin: [LeadStatus.CONVERTED, LeadStatus.LOST] }
       }),
-      this.leadModel.countDocuments({ isDeleted: false, status: LeadStatus.NEW })
+      this.leadModel.countDocuments({ isDeleted: false, status: LeadStatus.NEW }),
+      this.leadModel.countDocuments({
+        isDeleted: false,
+        $or: [
+          { leadSource: { $regex: 'diall?er', $options: 'i' } },
+          { omsLeadType: { $regex: 'diall?er', $options: 'i' } }
+        ]
+      }),
+      this.leadModel.countDocuments({
+        isDeleted: false,
+        $or: [
+          { leadSource: { $regex: 'notion', $options: 'i' } },
+          { omsLeadType: { $regex: 'notion', $options: 'i' } }
+        ]
+      })
     ]);
 
     // Source distribution
@@ -299,39 +392,28 @@ export class LeadsService {
       });
     }
 
+    insights.push({
+      title: "Dialer Leads",
+      metric: dialerCount,
+      explanation: `Leads generated through the dialer integration.`,
+      severity: "info"
+    });
+
+    insights.push({
+      title: "Notion Leads",
+      metric: notionCount,
+      explanation: `Leads captured via Notion.`,
+      severity: "info"
+    });
+
     if (sourceStats.length > 0) {
-      // Find specific sources (case insensitive check)
-      const dialerSource = sourceStats.find(s => String(s._id).toLowerCase() === 'dialler' || String(s._id).toLowerCase() === 'dialer');
-      const notionSource = sourceStats.find(s => String(s._id).toLowerCase() === 'notion');
-
-      if (dialerSource) {
-        insights.push({
-          title: "Dialer Leads",
-          metric: dialerSource.count,
-          explanation: `Leads generated through the dialer integration.`,
-          severity: "info"
-        });
-      }
-
-      if (notionSource) {
-        insights.push({
-          title: "Notion Leads",
-          metric: notionSource.count,
-          explanation: `Leads captured via Notion.`,
-          severity: "info"
-        });
-      }
-
-      // If neither exists but we still have a top source, show it
-      if (!dialerSource && !notionSource) {
-        const topSource = sourceStats[0];
-        insights.push({
-          title: "Top Lead Source",
-          metric: topSource._id || "Unknown",
-          explanation: `Highest volume source with ${topSource.count} leads generated.`,
-          severity: "info"
-        });
-      }
+      const topSource = sourceStats[0];
+      insights.push({
+        title: "Top Lead Source",
+        metric: topSource._id || "Unknown",
+        explanation: `Highest volume source with ${topSource.count} leads generated.`,
+        severity: "info"
+      });
     }
 
     let conversionRate = 0;
@@ -377,6 +459,8 @@ export class LeadsService {
           rejectedLeads,
           disbursedLeads,
           followUpLeads: activeLeads,
+          dialerLeads: dialerCount,
+          notionLeads: notionCount,
         },
         doctorStats: {
           total: doctorLeadsList.length,
@@ -464,22 +548,57 @@ export class LeadsService {
     return { success: true };
   }
 
+  private isSyncing = false;
+
+  private async fetchWithRetry(url: string, options: any = {}, retries = 2): Promise<Response> {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const response = await fetch(url, options);
+        return response;
+      } catch (err: any) {
+        const isNetworkErr =
+          err?.name === 'ConnectTimeoutError' ||
+          err?.code === 'UND_ERR_CONNECT_TIMEOUT' ||
+          err?.cause?.code === 'ECONNRESET' ||
+          err?.cause?.code === 'ETIMEDOUT' ||
+          err?.message?.includes('fetch failed');
+
+        if (attempt < retries && isNetworkErr) {
+          await new Promise((resolve) => setTimeout(resolve, 800 * attempt));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error(`Failed to fetch ${url} after ${retries} attempts`);
+  }
+
   /**
    * Sync Leads from OMS automatically every 5 minutes
    */
   @Cron(CronExpression.EVERY_5_MINUTES)
   async syncOmsLeads(startDate?: string, endDate?: string) {
+    if (this.isSyncing) {
+      return { success: false, message: 'Sync already in progress' };
+    }
+    this.isSyncing = true;
+
     const OMS_BASE_URL = process.env.OMS_BASE_URL || 'https://admin.f2fintech.in';
     const OMS_COMPANY_ID = process.env.OMS_COMPANY_ID || '101';
 
     try {
-      let url = `${OMS_BASE_URL}/api/v1/get-all-tickets?companyId=${OMS_COMPANY_ID}&page=1&limit=1000`;
+      let url = `${OMS_BASE_URL}/api/v1/get-all-tickets?companyId=${OMS_COMPANY_ID}&page=1&limit=500`;
       if (startDate && endDate) {
         url += `&startDate=${startDate}&endDate=${endDate}`;
       }
 
-      const response = await fetch(url, {
-        headers: { 'companyid': OMS_COMPANY_ID }
+      const response = await this.fetchWithRetry(url, {
+        headers: {
+          companyid: OMS_COMPANY_ID,
+          Accept: 'application/json',
+          'User-Agent': 'F2CRM-Server/1.0',
+        },
+        signal: AbortSignal.timeout(20000),
       });
 
       if (!response.ok) {
@@ -499,17 +618,34 @@ export class LeadsService {
           continue;
         }
 
-        const existingLead = await this.leadModel.findOne({ phone, isDeleted: false });
+        const omsTicketId = item.ticketId || item.ticket_id || null;
+        let existingLead: any = null;
+        if (omsTicketId) {
+          existingLead = await this.leadModel.findOne({ omsTicketId, isDeleted: false });
+        } else {
+          existingLead = await this.leadModel.findOne({ phone, isDeleted: false });
+        }
 
         const omsTicketStatus = item.ticketStatus || item.loanStatus || '';
         const omsApprovedAmount = parseFloat(item.approvedAmount) || 0;
         const omsDisbursedAmount = parseFloat(item.disbursedAmount) || 0;
-        const omsUserId = item.user_id || null;
-        const omsTicketId = item.ticketId || item.ticket_id || null;
-        const omsAppliedByName = item.appliedByName || '';
+        const omsUserId = item.appliedBy || null;
         const omsProvider = item.applicationProvider || item.provider || '';
         const omsTenure = parseInt(item.applicationTenure) || 0;
         const omsLeadType = item.leadType || '';
+        const leadSource = item.applicationSource || item.source || item.leadType || 'OMS';
+
+        const agentMap: Record<number, string> = {
+          42: 'Riya Chaddha',
+          103: 'Sumit Kumar',
+          45: 'Anil',
+          63: 'Amit Kumar',
+          99: 'Samreen Khan',
+        };
+        const omsAppliedByName =
+          item.appliedBy && agentMap[item.appliedBy]
+            ? agentMap[item.appliedBy]
+            : item.appliedByName || '';
 
         if (!existingLead) {
           const leadId = 'L' + Date.now().toString() + Math.floor(Math.random() * 1000);
@@ -522,7 +658,7 @@ export class LeadsService {
             city: item.customerLocation || '',
             loanType: item.loanType || '',
             loanAmount: parseFloat(item.applicationAmount) || 0,
-            leadSource: item.leadType || item.source || 'OMS',
+            leadSource: leadSource,
             status: LeadStatus.NEW,
             omsTicketStatus,
             omsApprovedAmount,
@@ -532,7 +668,7 @@ export class LeadsService {
             omsAppliedByName,
             omsProvider,
             omsTenure,
-            omsLeadType
+            omsLeadType,
           });
 
           await newLead.save();
@@ -563,19 +699,22 @@ export class LeadsService {
 
           created++;
         } else {
-          // Update existing lead with latest OMS ticket status
+          // Check if ticket status changed before fetching history
+          const statusChanged = existingLead.omsTicketStatus !== omsTicketStatus;
           existingLead.omsTicketStatus = omsTicketStatus;
           existingLead.omsApprovedAmount = omsApprovedAmount;
           existingLead.omsDisbursedAmount = omsDisbursedAmount;
           existingLead.omsUserId = omsUserId;
           existingLead.omsTicketId = omsTicketId;
-          if (omsAppliedByName) existingLead.omsAppliedByName = omsAppliedByName;
+          existingLead.omsAppliedByName = omsAppliedByName;
           existingLead.omsProvider = omsProvider;
           existingLead.omsTenure = omsTenure;
           existingLead.omsLeadType = omsLeadType;
+          if (leadSource) existingLead.leadSource = leadSource;
           await existingLead.save();
 
-          if (item.ticketId) {
+          // Only sync history if the ticket status has actually changed
+          if (item.ticketId && statusChanged) {
             await this.syncTicketHistory(item.ticketId, existingLead._id, OMS_BASE_URL, OMS_COMPANY_ID);
           }
 
@@ -585,16 +724,30 @@ export class LeadsService {
 
       return { success: true, created, skipped };
     } catch (err: any) {
-      console.error(`Failed to sync OMS leads: ${err.message}`);
+      console.warn(`[OMS Sync] Warning during OMS sync: ${err.message}`);
       return { success: false, message: err.message };
+    } finally {
+      this.isSyncing = false;
     }
   }
 
   private async syncTicketHistory(ticketId: number, leadId: any, OMS_BASE_URL: string, OMS_COMPANY_ID: string) {
     try {
-      const res = await fetch(`${OMS_BASE_URL}/api/v1/get-ticket-histories/${ticketId}`, {
-        headers: { 'companyid': OMS_COMPANY_ID }
-      });
+      // Small pause to prevent burst connection resets against remote server
+      await new Promise((resolve) => setTimeout(resolve, 80));
+
+      const res = await this.fetchWithRetry(
+        `${OMS_BASE_URL}/api/v1/get-ticket-histories/${ticketId}`,
+        {
+          headers: {
+            companyid: OMS_COMPANY_ID,
+            Accept: 'application/json',
+            'User-Agent': 'F2CRM-Server/1.0',
+          },
+          signal: AbortSignal.timeout(10000),
+        },
+        2,
+      );
       if (!res.ok) return;
       const json = await res.json();
       const histories = json?.data || [];
@@ -615,9 +768,8 @@ export class LeadsService {
           } as any);
         }
       }
-    } catch (err) {
-      console.error(`Failed to sync history for ticket ${ticketId}`, err);
+    } catch (err: any) {
+      console.warn(`[OMS Sync] Could not sync history for ticket ${ticketId}: ${err?.message || err}`);
     }
   }
 }
-

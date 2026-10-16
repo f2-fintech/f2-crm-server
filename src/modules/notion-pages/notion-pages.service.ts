@@ -26,7 +26,7 @@ export class NotionPagesService implements OnModuleInit {
     @InjectModel(Team.name) private readonly teamModel: Model<TeamDocument>,
     private readonly notificationsService: NotificationsService,
     private readonly mailService: MailService,
-  ) {}
+  ) { }
 
   async onModuleInit() {
     try {
@@ -915,41 +915,20 @@ export class NotionPagesService implements OnModuleInit {
       throw new ForbiddenException('Only admins can view unified remarks');
     }
 
-    const pages = await this.pageModel.aggregate([
-      { $match: { isDeleted: false, pageType: 'SHEET' } },
-      {
-        $lookup: {
-          from: 'teams',
-          localField: 'teamId',
-          foreignField: '_id',
-          as: 'team',
-        },
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: 'assignedMemberId',
-          foreignField: '_id',
-          as: 'assignedMember',
-        },
-      },
-      {
-        $project: {
-          title: 1,
-          columns: 1,
-          rows: 1,
-          createdAt: 1,
-          teamId: { $arrayElemAt: ['$team', 0] },
-          assignedMemberId: { $arrayElemAt: ['$assignedMember', 0] },
-        },
-      },
-    ]);
+    const pages = await this.pageModel
+      .find({ isDeleted: false, pageType: 'SHEET' })
+      .select('title columns rows createdAt teamId assignedMemberId')
+      .populate('teamId', 'name')
+      .populate('assignedMemberId', 'firstName lastName')
+      .lean();
 
     return pages
-      .map((page) => {
-        const teamName = page.teamId?.name || 'Unassigned';
-        const assignedTo = page.assignedMemberId
-          ? `${page.assignedMemberId.firstName} ${page.assignedMemberId.lastName}`
+      .map((page: any) => {
+        const teamObj: any = page.teamId;
+        const memberObj: any = page.assignedMemberId;
+        const teamName = teamObj?.name || 'Unassigned';
+        const assignedTo = memberObj
+          ? `${memberObj.firstName || ''} ${memberObj.lastName || ''}`.trim() || 'Unassigned'
           : 'Unassigned';
 
         // Build a column key → column name map (col_0 → "Name", col_1 → "Mobile", etc.)
@@ -975,30 +954,30 @@ export class NotionPagesService implements OnModuleInit {
           })
           .map(([key]) => key);
 
-        // Also look for raw keys that look like feedback fields even without column map
-        const allRowKeys = new Set<string>();
-        (page.rows || []).forEach((row: any) => {
+        // Also check sample rows (first 5) for raw keys like 'disposition', 'remarks', etc.
+        const sampleRows = (page.rows || []).slice(0, 5);
+        sampleRows.forEach((row: any) => {
           Object.keys(row).forEach((k) => {
-            if (k !== 'id') allRowKeys.add(k);
+            if (k !== 'id') {
+              const kl = k.toLowerCase();
+              if (
+                kl.includes('remark') ||
+                kl.includes('feedback') ||
+                kl.includes('comment') ||
+                kl.includes('note')
+              ) {
+                if (!remarkKeys.includes(k)) remarkKeys.push(k);
+              }
+            }
           });
-        });
-        allRowKeys.forEach((k) => {
-          const kl = k.toLowerCase();
-          if (
-            kl.includes('remark') ||
-            kl.includes('feedback') ||
-            kl.includes('comment') ||
-            kl.includes('note')
-          ) {
-            if (!remarkKeys.includes(k)) remarkKeys.push(k);
-          }
         });
 
         let remarksFilled = 0;
         let remarksEmpty = 0;
+        const rowsWithRemarksRaw: any[] = [];
 
-        // Filter FIRST to avoid allocating millions of objects for empty rows
-        const rowsWithRemarksRaw = (page.rows || []).filter((row: any) => {
+        // Single pass over rows
+        (page.rows || []).forEach((row: any) => {
           const hasRemarkText = remarkKeys.some(
             (k) => row[k] && String(row[k]).trim() !== '',
           );
@@ -1007,15 +986,15 @@ export class NotionPagesService implements OnModuleInit {
 
           if (hasRemarkText || hasDisposition) {
             remarksFilled++;
-            return true;
+            rowsWithRemarksRaw.push(row);
           } else {
             remarksEmpty++;
-            return false;
           }
         });
 
         // Map ONLY the rows that have remarks to human-readable objects
-        const mappedRows = rowsWithRemarksRaw.map((row: any) => {
+        // Limit to latest 300 remarks per sheet to prevent huge JSON payload transfers
+        const mappedRows = rowsWithRemarksRaw.slice(-300).map((row: any) => {
           const readable: Record<string, any> = { _rowId: row.id };
           Object.entries(row).forEach(([key, value]) => {
             if (key === 'id') return;
@@ -1027,7 +1006,7 @@ export class NotionPagesService implements OnModuleInit {
               readable.feedback_notes = value;
               return;
             }
-            const humanKey = colMap[key] || key; // fallback to raw key if no mapping
+            const humanKey = colMap[key] || key;
             readable[humanKey] = value;
           });
           return readable;
@@ -1048,6 +1027,309 @@ export class NotionPagesService implements OnModuleInit {
           rows: mappedRows,
         };
       })
-      .filter((p) => p.totalRows > 0); // Only return pages that have data
+      .filter((p) => p.totalRows > 0);
+  }
+
+  async getDashboardStats(user: any) {
+    const role = user.role?.toUpperCase() || 'EMPLOYEE';
+    const userId = user._id ? user._id.toString() : user.id?.toString();
+
+    // Helper to calculate remarks filled vs empty for a sheet
+    const analyzeSheet = (page: any) => {
+      const remarkKeys: string[] = [];
+      if (Array.isArray(page.columns)) {
+        page.columns.forEach((col: any) => {
+          const n = (col.name || '').toLowerCase();
+          if (
+            n.includes('remark') ||
+            n.includes('feedback') ||
+            n.includes('comment') ||
+            n.includes('note') ||
+            n.includes('status') ||
+            n.includes('disposition')
+          ) {
+            remarkKeys.push(col.key);
+          }
+        });
+      }
+      let filled = 0;
+      let empty = 0;
+      const rows = page.rows || [];
+      rows.forEach((row: any) => {
+        const hasRemarkCol = remarkKeys.some(
+          (k) => row[k] && String(row[k]).trim() !== '',
+        );
+        const hasFeedbackNotes =
+          row.feedback_notes && String(row.feedback_notes).trim() !== '';
+        const hasDisposition =
+          row.disposition && String(row.disposition).trim() !== '';
+        if (hasRemarkCol || hasFeedbackNotes || hasDisposition) {
+          filled++;
+        } else {
+          empty++;
+        }
+      });
+      return { total: rows.length, filled, empty };
+    };
+
+    if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
+      const [allTeams, allUsers, allSheets] = await Promise.all([
+        this.teamModel.find({ isActive: true }).select('name').lean(),
+        this.userModel
+          .find({ isActive: true, role: { $nin: ['SUPER_ADMIN', 'ADMIN'] } })
+          .select('firstName lastName email role teamId')
+          .lean(),
+        this.pageModel
+          .find({ isDeleted: false, pageType: 'SHEET' })
+          .select('title teamId assignedMemberId columns rows createdAt')
+          .lean(),
+      ]);
+
+      const teamMap: Record<string, any> = {};
+      allTeams.forEach((t) => {
+        teamMap[t._id.toString()] = {
+          teamId: t._id,
+          teamName: t.name,
+          sheetsCount: 0,
+          totalLeads: 0,
+          remarksFilled: 0,
+          remarksEmpty: 0,
+        };
+      });
+      teamMap['unassigned'] = {
+        teamId: null,
+        teamName: 'General / Unassigned',
+        sheetsCount: 0,
+        totalLeads: 0,
+        remarksFilled: 0,
+        remarksEmpty: 0,
+      };
+
+      const memberMap: Record<string, any> = {};
+      allUsers.forEach((u: any) => {
+        memberMap[u._id.toString()] = {
+          memberId: u._id,
+          name: `${u.firstName} ${u.lastName || ''}`.trim(),
+          role: u.role,
+          sheetsCount: 0,
+          totalLeads: 0,
+          remarksFilled: 0,
+          remarksEmpty: 0,
+        };
+      });
+
+      let grandTotalSheets = 0;
+      let grandTotalLeads = 0;
+      let grandTotalFilled = 0;
+      let grandTotalEmpty = 0;
+
+      allSheets.forEach((sheet) => {
+        const { total, filled, empty } = analyzeSheet(sheet);
+        grandTotalSheets++;
+        grandTotalLeads += total;
+        grandTotalFilled += filled;
+        grandTotalEmpty += empty;
+
+        const tid = sheet.teamId ? sheet.teamId.toString() : 'unassigned';
+        if (!teamMap[tid]) {
+          teamMap[tid] = {
+            teamId: sheet.teamId,
+            teamName: 'Other Team',
+            sheetsCount: 0,
+            totalLeads: 0,
+            remarksFilled: 0,
+            remarksEmpty: 0,
+          };
+        }
+        teamMap[tid].sheetsCount++;
+        teamMap[tid].totalLeads += total;
+        teamMap[tid].remarksFilled += filled;
+        teamMap[tid].remarksEmpty += empty;
+
+        if (sheet.assignedMemberId) {
+          const mid = sheet.assignedMemberId.toString();
+          if (memberMap[mid]) {
+            memberMap[mid].sheetsCount++;
+            memberMap[mid].totalLeads += total;
+            memberMap[mid].remarksFilled += filled;
+            memberMap[mid].remarksEmpty += empty;
+          }
+        }
+      });
+
+      return {
+        role: 'ADMIN',
+        summary: {
+          totalSheets: grandTotalSheets,
+          totalLeads: grandTotalLeads,
+          remarksFilled: grandTotalFilled,
+          remarksEmpty: grandTotalEmpty,
+        },
+        teams: Object.values(teamMap).filter((t: any) => t.sheetsCount > 0),
+        members: Object.values(memberMap)
+          .filter((m: any) => m.sheetsCount > 0)
+          .sort((a: any, b: any) => b.totalLeads - a.totalLeads),
+      };
+    }
+
+    if (['MANAGER', 'TEAM_LEADER'].includes(role)) {
+
+      let teamId = user.teamId;
+      let teamMembers: any[] = [];
+      const userObjId = user._id ? (typeof user._id === 'string' ? new Types.ObjectId(user._id) : user._id) : null;
+
+      if (role === 'TEAM_LEADER') {
+        // Strictly only direct reports assigned to this Team Leader
+        teamMembers = await this.userModel
+          .find({
+            reportsTo: { $in: [user._id, userObjId].filter(Boolean) },
+            isActive: true,
+          })
+          .select('firstName lastName email role')
+          .lean();
+      } else {
+        const managedTeams = await this.teamModel
+          .find({
+            isActive: true,
+            $or: [
+              { managerId: { $in: [user._id, userObjId].filter(Boolean) } },
+              { members: { $in: [user._id, userObjId].filter(Boolean) } },
+            ],
+          })
+          .lean();
+        const teamIds = managedTeams.map((t) => t._id);
+        if (teamId && !teamIds.some((id) => id.toString() === teamId.toString())) {
+          teamIds.push(teamId);
+        }
+        teamMembers = await this.userModel
+          .find({ teamId: { $in: teamIds }, isActive: true })
+          .select('firstName lastName email role')
+          .lean();
+      }
+
+      const memberIds = teamMembers.map((m) => m._id);
+      const allScopedIds = [
+        user._id,
+        ...(userObjId ? [userObjId] : []),
+        ...memberIds,
+      ];
+
+      // Sheets belonging strictly to this group:
+      // Manager can see all teamId sheets, but Team Leader only sees sheets of their direct reports + self
+      const queryCond: any = {
+        isDeleted: false,
+        pageType: 'SHEET',
+        $or: [
+          ...(role === 'MANAGER' && teamId ? [{ teamId }] : []),
+          { assignedMemberId: { $in: allScopedIds } },
+          { createdBy: user._id },
+        ],
+      };
+
+      const sheets = await this.pageModel
+        .find(queryCond)
+        .select('title teamId assignedMemberId columns rows createdAt')
+        .lean();
+
+      let teamSheets = 0;
+      let totalLeads = 0;
+      let remarksFilled = 0;
+      let remarksEmpty = 0;
+
+      const memberStatsMap: Record<string, any> = {};
+      teamMembers.forEach((m) => {
+        memberStatsMap[m._id.toString()] = {
+          memberId: m._id,
+          name: `${m.firstName} ${m.lastName || ''}`.trim(),
+          role: m.role,
+          sheetsCount: 0,
+          totalLeads: 0,
+          remarksFilled: 0,
+          remarksEmpty: 0,
+        };
+      });
+
+      sheets.forEach((sheet) => {
+        const { total, filled, empty } = analyzeSheet(sheet);
+        teamSheets++;
+        totalLeads += total;
+        remarksFilled += filled;
+        remarksEmpty += empty;
+
+        if (sheet.assignedMemberId) {
+          const mid = sheet.assignedMemberId.toString();
+          if (memberStatsMap[mid]) {
+            memberStatsMap[mid].sheetsCount++;
+            memberStatsMap[mid].totalLeads += total;
+            memberStatsMap[mid].remarksFilled += filled;
+            memberStatsMap[mid].remarksEmpty += empty;
+          }
+        }
+      });
+
+      let teamName = 'My Team';
+      if (role === 'TEAM_LEADER') {
+        teamName = `${user.firstName || 'Team Leader'} Team`;
+      } else if (teamId) {
+        const t = await this.teamModel.findById(teamId).select('name').lean();
+        if (t) teamName = t.name;
+      }
+
+      return {
+        role,
+        teamName,
+        summary: {
+          teamSheets,
+          totalLeads,
+          remarksFilled,
+          remarksEmpty,
+        },
+        members: Object.values(memberStatsMap),
+      };
+    }
+
+    // Default: Employee / Sourcer / Channel Partner
+    const mySheets = await this.pageModel
+      .find({
+        isDeleted: false,
+        pageType: 'SHEET',
+        $or: [
+          { assignedMemberId: user._id },
+          { createdBy: user._id },
+          { sharedWith: user._id },
+        ],
+      })
+      .select('title columns rows createdAt')
+      .lean();
+
+    let totalLeads = 0;
+    let remarksFilled = 0;
+    let remarksEmpty = 0;
+
+    const sheetList = mySheets.map((sheet: any) => {
+      const { total, filled, empty } = analyzeSheet(sheet);
+      totalLeads += total;
+      remarksFilled += filled;
+      remarksEmpty += empty;
+      return {
+        _id: sheet._id,
+        title: sheet.title,
+        totalLeads: total,
+        remarksFilled: filled,
+        remarksEmpty: empty,
+        createdAt: sheet.createdAt,
+      };
+    });
+
+    return {
+      role: 'EMPLOYEE',
+      summary: {
+        mySheets: mySheets.length,
+        totalLeads,
+        remarksFilled,
+        remarksEmpty,
+      },
+      sheets: sheetList,
+    };
   }
 }

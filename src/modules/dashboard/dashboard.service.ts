@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { Team, TeamDocument } from '../teams/schemas/team.schema';
 import { Branch, BranchDocument } from '../branches/schemas/branch.schema';
@@ -33,33 +33,77 @@ export class DashboardService {
     @InjectModel('StageHistory') private stageHistoryModel: Model<any>,
     @InjectModel('FollowUp') private followUpModel: Model<any>,
     private readonly slaConfigService: SlaConfigService,
-  ) {}
+  ) { }
 
   async getDashboardData(user: any) {
     const role = user?.role?.toUpperCase();
 
     if (role === 'MANAGER' || role === 'TEAM_LEADER') {
+      const isTeamLeader = role === 'TEAM_LEADER';
       const teamId = user.teamId;
 
-      const [teamSize, activeMembers, teamPages] = await Promise.all([
-        this.userModel.countDocuments({ teamId }),
-        this.userModel.countDocuments({ teamId, isActive: true }),
-        this.pageModel.countDocuments({ teamId, isDeleted: false }),
-      ]);
+      let teamSize = 0;
+      let activeMembers = 0;
+      let teamPages = 0;
+      let aggregateMatch: any = {};
+      let recentUsers: any[] = [];
+
+      if (isTeamLeader) {
+        // Team Leader strictly manages direct reports assigned to them in the team
+        const tlObjId = user._id ? (typeof user._id === 'string' ? new Types.ObjectId(user._id) : user._id) : null;
+        const memberFilter = {
+          reportsTo: { $in: [user._id, tlObjId].filter(Boolean) },
+        };
+        const directReports = await this.userModel
+          .find(memberFilter)
+          .select('_id isActive firstName lastName email profileImage createdAt')
+          .lean();
+        const directReportIds = directReports.map((u) => u._id);
+        const myGroupIds = [user._id, ...(tlObjId ? [tlObjId] : []), ...directReportIds].filter(Boolean);
+
+        teamSize = directReports.length;
+        activeMembers = directReports.filter((d: any) => d.isActive).length;
+
+        teamPages = await this.pageModel.countDocuments({
+          assignedMemberId: { $in: myGroupIds },
+          isDeleted: false,
+        });
+
+        aggregateMatch = {
+          assignedMemberId: { $in: myGroupIds },
+          isDeleted: false,
+        };
+
+        recentUsers = await this.userModel
+          .find(memberFilter)
+          .sort({ createdAt: -1 })
+          .limit(5)
+          .select('firstName lastName email profileImage createdAt')
+          .exec();
+      } else {
+        // Manager manages the whole team
+        [teamSize, activeMembers, teamPages] = await Promise.all([
+          this.userModel.countDocuments({ teamId }),
+          this.userModel.countDocuments({ teamId, isActive: true }),
+          this.pageModel.countDocuments({ teamId, isDeleted: false }),
+        ]);
+
+        aggregateMatch = { teamId, isDeleted: false };
+
+        recentUsers = await this.userModel
+          .find({ teamId })
+          .sort({ createdAt: -1 })
+          .limit(5)
+          .select('firstName lastName email profileImage createdAt')
+          .exec();
+      }
 
       const aggregateResult = await this.pageModel.aggregate([
-        { $match: { teamId, isDeleted: false } },
+        { $match: aggregateMatch },
         { $project: { rowCount: { $size: { $ifNull: ['$rows', []] } } } },
         { $group: { _id: null, total: { $sum: '$rowCount' } } },
       ]);
       const totalLeads = aggregateResult[0]?.total || 0;
-
-      const recentUsers = await this.userModel
-        .find({ teamId })
-        .sort({ createdAt: -1 })
-        .limit(5)
-        .select('firstName lastName email profileImage createdAt')
-        .exec();
 
       const pipeline: Record<string, number> = {
         'New Leads': 0,
@@ -68,7 +112,7 @@ export class DashboardService {
         'Approved / Disbursed': 0,
       };
       const statusCounts = await this.pageModel.aggregate([
-        { $match: { teamId, isDeleted: false } },
+        { $match: aggregateMatch },
         { $unwind: '$rows' },
         {
           $project: {
@@ -358,7 +402,7 @@ export class DashboardService {
     // Current Pipeline (Active Leads, Apps, Customers)
     // We filter by assignedTo if not admin, but for now we'll do global or simple filters
     const matchCondition = { isDeleted: false };
-    
+
     // Quick totals
     const [
       totalLeads, activeLeads, qualifiedLeads, convertedLeads,
@@ -369,7 +413,7 @@ export class DashboardService {
       this.leadModel.countDocuments({ ...matchCondition, status: { $in: ['NEW', 'CONTACTED', 'FOLLOW_UP'] } }),
       this.leadModel.countDocuments({ ...matchCondition, status: 'QUALIFIED' }),
       this.leadModel.countDocuments({ ...matchCondition, status: 'CONVERTED' }),
-      
+
       this.applicationModel.countDocuments(matchCondition),
       this.applicationModel.countDocuments({ ...matchCondition, status: { $in: ['DRAFT', 'SUBMITTED', 'UNDER_REVIEW'] } }),
       this.applicationModel.countDocuments({ ...matchCondition, status: 'APPROVED' }),
@@ -394,7 +438,7 @@ export class DashboardService {
     // Determine date filter
     const now = new Date();
     let startDate = new Date();
-    startDate.setHours(0,0,0,0); // Today default
+    startDate.setHours(0, 0, 0, 0); // Today default
 
     if (timeframe === 'yesterday') {
       startDate.setDate(startDate.getDate() - 1);
@@ -408,7 +452,7 @@ export class DashboardService {
     }
 
     const matchQuery = { timestamp: { $gte: startDate } };
-    
+
     // Aggregation for event counts
     const eventCounts = await this.lifecycleEventModel.aggregate([
       { $match: matchQuery },
@@ -440,7 +484,7 @@ export class DashboardService {
 
   async getStageAging() {
     const slas = await this.slaConfigService.findAll();
-    
+
     // Create an object for quick SLA lookup by entityType_stage
     const slaMap = {};
     slas.forEach(sla => {
@@ -457,10 +501,10 @@ export class DashboardService {
     activeCases.forEach((c: any) => {
       const key = `${c.entityType}_${c.stage}`;
       const durationDays = (Date.now() - new Date(c.enteredAt).getTime()) / (1000 * 60 * 60 * 24);
-      
+
       const allowedDays = slaMap[key];
       let slaState = 'NOT_CONFIGURED';
-      
+
       if (allowedDays) {
         if (durationDays > allowedDays) slaState = 'BREACHED';
         else if (durationDays >= allowedDays * 0.8) slaState = 'AT_RISK';
@@ -574,7 +618,7 @@ export class DashboardService {
         breached: 0
       };
     });
-    
+
     // Add "Unassigned" bucket
     userMap['UNASSIGNED'] = {
       _id: null,
@@ -624,7 +668,7 @@ export class DashboardService {
     // or fetch the active stage histories and manually correlate.
     // For now, to keep it fast, we will skip SLA in this endpoint if we can't cleanly join it.
     // Wait, the Phase 7 instruction says: "SLA Breached Cases where Phase 6 supports this. Use actual assignedTo."
-    
+
     // Fetch active stage histories
     const activeCases = await this.stageHistoryModel.find({ exitedAt: null }).lean().exec();
     const slas = await this.slaConfigService.findAll();
@@ -653,7 +697,7 @@ export class DashboardService {
       if (allowedDays) {
         const durationDays = (Date.now() - new Date(c.enteredAt).getTime()) / (1000 * 60 * 60 * 24);
         const assignee = entityAssigneeMap[c.entityId.toString()] || 'UNASSIGNED';
-        
+
         if (userMap[assignee]) {
           if (durationDays > allowedDays) userMap[assignee].breached += 1;
           else if (durationDays >= allowedDays * 0.8) userMap[assignee].atRisk += 1;
@@ -680,7 +724,7 @@ export class DashboardService {
   async getAgentActivity(timeframe: string = 'today') {
     const now = new Date();
     let startDate = new Date();
-    startDate.setHours(0,0,0,0);
+    startDate.setHours(0, 0, 0, 0);
     if (timeframe === 'yesterday') {
       startDate.setDate(startDate.getDate() - 1);
       const endDate = new Date(startDate);
@@ -691,7 +735,7 @@ export class DashboardService {
       startDate.setDate(startDate.getDate() - 30);
     }
 
-    const events = await this.lifecycleEventModel.find({ 
+    const events = await this.lifecycleEventModel.find({
       timestamp: { $gte: startDate },
       performedBy: { $ne: null }
     }).lean().exec();
@@ -717,7 +761,7 @@ export class DashboardService {
         if (evt.toStage === 'QUALIFIED') activityMap[agentId].leadsQualified += 1;
         if (evt.toStage === 'CONVERTED') activityMap[agentId].leadsConverted += 1;
       }
-      
+
       if (evt.entityType === 'Application' && evt.eventType === 'STATUS_CHANGED') {
         if (evt.toStage === 'DRAFT' || evt.toStage === 'SUBMITTED') activityMap[agentId].appsCreated += 1;
         if (evt.toStage === 'APPROVED') activityMap[agentId].appsApproved += 1;
@@ -727,14 +771,14 @@ export class DashboardService {
 
     const userIds = Object.keys(activityMap);
     const users = await this.userModel.find({ _id: { $in: userIds } }).select('firstName lastName').lean().exec();
-    
+
     users.forEach(u => {
       if (activityMap[u._id.toString()]) {
         activityMap[u._id.toString()].name = `${u.firstName} ${u.lastName}`;
       }
     });
 
-    const activityTable = Object.values(activityMap).sort((a: any, b: any) => 
+    const activityTable = Object.values(activityMap).sort((a: any, b: any) =>
       (b.leadsConverted + b.appsApproved) - (a.leadsConverted + a.appsApproved)
     );
 
@@ -749,13 +793,13 @@ export class DashboardService {
     const now = new Date();
     const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfPreviousMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    
+
     // In a real advanced predictive model, we would use regression or ML here.
     // For now, we compare Previous Month and Current Month (extrapolated) and apply a growth factor for Target.
 
     const getModuleStats = async (model: any) => {
       if (!model) return { previous: 0, current: 0, future: 0 };
-      
+
       const previous = await model.countDocuments({
         createdAt: { $gte: startOfPreviousMonth, $lt: startOfCurrentMonth }
       });
@@ -775,17 +819,17 @@ export class DashboardService {
     const leads = await getModuleStats(this.leadModel);
     const apps = await getModuleStats(this.applicationModel);
     const customers = await getModuleStats(this.customerModel);
-    
+
     // Generate fallback data if db is empty so the showcase doesn't look empty
     const ensureNonEmpty = (data: any, fallbackPrev: number) => {
-       if (data.previous === 0 && data.current === 0) {
-           return {
-               previous: fallbackPrev,
-               current: Math.round(fallbackPrev * 1.1),
-               future: Math.round(fallbackPrev * 1.3)
-           };
-       }
-       return data;
+      if (data.previous === 0 && data.current === 0) {
+        return {
+          previous: fallbackPrev,
+          current: Math.round(fallbackPrev * 1.1),
+          future: Math.round(fallbackPrev * 1.3)
+        };
+      }
+      return data;
     };
 
     return {
@@ -795,9 +839,9 @@ export class DashboardService {
         Applications: ensureNonEmpty(apps, 420),
         Customers: ensureNonEmpty(customers, 180),
         Revenue: {
-           previous: 450000,
-           current: 510000,
-           future: 650000
+          previous: 450000,
+          current: 510000,
+          future: 650000
         }
       }
     };

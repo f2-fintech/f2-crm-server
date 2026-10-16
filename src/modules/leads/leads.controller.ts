@@ -13,7 +13,7 @@ import { CreateLeadDto } from './dto/create-lead.dto';
 
 @Controller('leads')
 export class LeadsController {
-  constructor(private readonly leadsService: LeadsService) {}
+  constructor(private readonly leadsService: LeadsService) { }
 
   @Post()
   create(@Body() createLeadDto: CreateLeadDto) {
@@ -65,8 +65,26 @@ export class LeadsController {
   @Get('oms/history/:ticketId')
   async getOmsHistory(@Param('ticketId') ticketId: string) {
     try {
-      const response = await fetch(`https://admin.f2fintech.in/api/v1/get-ticket-histories/${ticketId}`);
-      const data = await response.json();
+      const baseUrl = process.env.OMS_BASE_URL || 'https://admin.f2fintech.in';
+      const companyId = process.env.OMS_COMPANY_ID || '101';
+      let response = await fetch(`${baseUrl}/api/v1/get-ticket-histories/${ticketId}`, {
+        headers: { companyid: companyId, Accept: 'application/json', 'User-Agent': 'F2CRM-Server/1.0' },
+        signal: AbortSignal.timeout(10000),
+      });
+      let data = await response.json();
+
+      if ((!data?.data || data.statusCode === 404)) {
+        const fallbackId = companyId === '101' ? '6' : '101';
+        const altResponse = await fetch(`${baseUrl}/api/v1/get-ticket-histories/${ticketId}`, {
+          headers: { companyid: fallbackId, Accept: 'application/json', 'User-Agent': 'F2CRM-Server/1.0' },
+          signal: AbortSignal.timeout(10000),
+        });
+        const altData = await altResponse.json();
+        if (altData?.data && Array.isArray(altData.data)) {
+          data = altData;
+        }
+      }
+
       return data;
     } catch (error) {
       return { success: false, message: error.message };
@@ -76,8 +94,26 @@ export class LeadsController {
   @Get('oms/detail/:ticketId')
   async getOmsDetail(@Param('ticketId') ticketId: string) {
     try {
-      const response = await fetch(`https://admin.f2fintech.in/api/v1/get-ticket-with-detail/${ticketId}`);
-      const data = await response.json();
+      const baseUrl = process.env.OMS_BASE_URL || 'https://admin.f2fintech.in';
+      const companyId = process.env.OMS_COMPANY_ID || '101';
+      let response = await fetch(`${baseUrl}/api/v1/get-ticket-with-detail/${ticketId}`, {
+        headers: { companyid: companyId, Accept: 'application/json', 'User-Agent': 'F2CRM-Server/1.0' },
+        signal: AbortSignal.timeout(10000),
+      });
+      let data = await response.json();
+
+      if ((!data?.data || data.statusCode === 404)) {
+        const fallbackId = companyId === '101' ? '6' : '101';
+        const alt = await fetch(`${baseUrl}/api/v1/get-ticket-with-detail/${ticketId}`, {
+          headers: { companyid: fallbackId, Accept: 'application/json', 'User-Agent': 'F2CRM-Server/1.0' },
+          signal: AbortSignal.timeout(10000),
+        });
+        const altData = await alt.json();
+        if (altData?.data) {
+          data = altData;
+        }
+      }
+
       return data;
     } catch (error) {
       return { success: false, message: error.message };

@@ -51,11 +51,16 @@ export class CloneFormatDto {
 @Controller('notion-pages')
 @UseGuards(AuthGuard('jwt'))
 export class NotionPagesController {
-  constructor(private readonly pagesService: NotionPagesService) {}
+  constructor(private readonly pagesService: NotionPagesService) { }
 
   @Get('tree')
   getTree(@Req() req: Request) {
     return this.pagesService.getTree(req.user);
+  }
+
+  @Get('dashboard-stats')
+  getDashboardStats(@Req() req: Request) {
+    return this.pagesService.getDashboardStats(req.user);
   }
 
   @Post('accept-invite')
