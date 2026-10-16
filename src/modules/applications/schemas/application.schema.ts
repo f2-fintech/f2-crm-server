@@ -119,9 +119,7 @@ export class Application {
   isDeleted: boolean;
 }
 
-export const ApplicationSchema =
-  SchemaFactory.createForClass(Application);
-
+export const ApplicationSchema = SchemaFactory.createForClass(Application);
 
 // Text Search
 ApplicationSchema.index({

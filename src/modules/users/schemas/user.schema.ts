@@ -57,7 +57,15 @@ export class User {
 
   @Prop({
     type: String,
-    enum: ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'TEAM_LEADER', 'EMPLOYEE', 'SOURCER', 'CHANNEL_PARTNER'],
+    enum: [
+      'SUPER_ADMIN',
+      'ADMIN',
+      'MANAGER',
+      'TEAM_LEADER',
+      'EMPLOYEE',
+      'SOURCER',
+      'CHANNEL_PARTNER',
+    ],
     default: 'EMPLOYEE',
     required: true,
     uppercase: true,

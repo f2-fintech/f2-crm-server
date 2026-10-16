@@ -14,17 +14,13 @@ import { UpdatePermissionDto } from './dto/update-permission.dto';
 
 @Controller('permissions')
 export class PermissionsController {
-  constructor(
-    private readonly permissionsService: PermissionsService,
-  ) {}
+  constructor(private readonly permissionsService: PermissionsService) {}
 
   /**
    * Create Permission
    */
   @Post()
-  async create(
-    @Body() createPermissionDto: CreatePermissionDto,
-  ) {
+  async create(@Body() createPermissionDto: CreatePermissionDto) {
     return await this.permissionsService.create(createPermissionDto);
   }
 
@@ -52,10 +48,7 @@ export class PermissionsController {
     @Param('id') id: string,
     @Body() updatePermissionDto: UpdatePermissionDto,
   ) {
-    return await this.permissionsService.update(
-      id,
-      updatePermissionDto,
-    );
+    return await this.permissionsService.update(id, updatePermissionDto);
   }
 
   /**

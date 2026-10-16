@@ -41,10 +41,7 @@ export class RolesService {
    * Get All Roles
    */
   async findAll(): Promise<Role[]> {
-    return this.roleModel
-      .find()
-      .sort({ createdAt: -1 })
-      .exec();
+    return this.roleModel.find().sort({ createdAt: -1 }).exec();
   }
 
   /**
@@ -63,10 +60,7 @@ export class RolesService {
   /**
    * Update Role
    */
-  async update(
-    id: string,
-    updateRoleDto: UpdateRoleDto,
-  ): Promise<Role> {
+  async update(id: string, updateRoleDto: UpdateRoleDto): Promise<Role> {
     const role = await this.roleModel.findById(id);
 
     if (!role) {

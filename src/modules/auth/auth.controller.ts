@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Post, Patch, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { IsString, IsNotEmpty } from 'class-validator';
@@ -21,7 +29,10 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
-  @ApiOperation({ summary: 'Register User (Role: SUPER_ADMIN, ADMIN, MANAGER, TEAM_LEADER, EMPLOYEE)' })
+  @ApiOperation({
+    summary:
+      'Register User (Role: SUPER_ADMIN, ADMIN, MANAGER, TEAM_LEADER, EMPLOYEE)',
+  })
   register(@Body() dto: CreateAuthDto) {
     return this.authService.register(dto);
   }

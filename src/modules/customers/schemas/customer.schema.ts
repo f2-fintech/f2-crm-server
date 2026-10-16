@@ -19,7 +19,7 @@ export class Customer {
     required: true,
     trim: true,
   })
-    customerId: string;
+  customerId: string;
 
   @Prop({
     default: '',
@@ -137,11 +137,9 @@ export class Customer {
   isDeleted: boolean;
 }
 
-export const CustomerSchema =
-  SchemaFactory.createForClass(Customer);
+export const CustomerSchema = SchemaFactory.createForClass(Customer);
 
 /* ---------- Indexes ---------- */
-
 
 CustomerSchema.index({
   fullName: 'text',

@@ -8,11 +8,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import {
-  ApiOperation,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
 import { FollowUpsService } from './follow-ups.service';
 import { CreateFollowUpDto } from './dto/create-follow-up.dto';
@@ -23,9 +19,7 @@ import { FollowUpStatus } from './schemas/follow-up.schema';
 @ApiTags('Follow Ups')
 @Controller('follow-ups')
 export class FollowUpsController {
-  constructor(
-    private readonly followUpsService: FollowUpsService,
-  ) {}
+  constructor(private readonly followUpsService: FollowUpsService) {}
 
   @Post()
   @ApiOperation({
@@ -35,9 +29,7 @@ export class FollowUpsController {
     status: 201,
     description: 'Follow Up created successfully.',
   })
-  create(
-    @Body() createFollowUpDto: CreateFollowUpDto,
-  ) {
+  create(@Body() createFollowUpDto: CreateFollowUpDto) {
     return this.followUpsService.create(createFollowUpDto);
   }
 
@@ -45,9 +37,7 @@ export class FollowUpsController {
   @ApiOperation({
     summary: 'Get All Follow Ups',
   })
-  findAll(
-    @Query() query: FollowUpQueryDto,
-  ) {
+  findAll(@Query() query: FollowUpQueryDto) {
     return this.followUpsService.findAll(query);
   }
 
@@ -87,9 +77,7 @@ export class FollowUpsController {
   @ApiOperation({
     summary: 'Get Follow Up By Id',
   })
-  findOne(
-    @Param('id') id: string,
-  ) {
+  findOne(@Param('id') id: string) {
     return this.followUpsService.findOne(id);
   }
 
@@ -101,10 +89,7 @@ export class FollowUpsController {
     @Param('id') id: string,
     @Body() updateFollowUpDto: UpdateFollowUpDto,
   ) {
-    return this.followUpsService.update(
-      id,
-      updateFollowUpDto,
-    );
+    return this.followUpsService.update(id, updateFollowUpDto);
   }
 
   @Patch(':id/status')
@@ -115,19 +100,14 @@ export class FollowUpsController {
     @Param('id') id: string,
     @Body('status') status: FollowUpStatus,
   ) {
-    return this.followUpsService.changeStatus(
-      id,
-      status,
-    );
+    return this.followUpsService.changeStatus(id, status);
   }
 
   @Delete(':id')
   @ApiOperation({
     summary: 'Delete Follow Up',
   })
-  remove(
-    @Param('id') id: string,
-  ) {
+  remove(@Param('id') id: string) {
     return this.followUpsService.remove(id);
   }
 }

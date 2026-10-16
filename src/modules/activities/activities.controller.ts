@@ -19,9 +19,7 @@ import { ActivityStatus } from './schema/activity.schema';
 
 @Controller('activities')
 export class ActivitiesController {
-  constructor(
-    private readonly activitiesService: ActivitiesService,
-  ) {}
+  constructor(private readonly activitiesService: ActivitiesService) {}
 
   /**
    * Create Activity
@@ -31,9 +29,7 @@ export class ActivitiesController {
     @Body()
     createActivityDto: CreateActivityDto,
   ) {
-    return this.activitiesService.create(
-      createActivityDto,
-    );
+    return this.activitiesService.create(createActivityDto);
   }
 
   /**
@@ -79,9 +75,7 @@ export class ActivitiesController {
     @Param('leadId')
     leadId: string,
   ) {
-    return this.activitiesService.getLeadActivities(
-      leadId,
-    );
+    return this.activitiesService.getLeadActivities(leadId);
   }
 
   /**
@@ -106,10 +100,7 @@ export class ActivitiesController {
     @Body()
     updateActivityDto: UpdateActivityDto,
   ) {
-    return this.activitiesService.update(
-      id,
-      updateActivityDto,
-    );
+    return this.activitiesService.update(id, updateActivityDto);
   }
 
   /**
@@ -123,10 +114,7 @@ export class ActivitiesController {
     @Body('status')
     status: ActivityStatus,
   ) {
-    return this.activitiesService.changeStatus(
-      id,
-      status,
-    );
+    return this.activitiesService.changeStatus(id, status);
   }
 
   /**

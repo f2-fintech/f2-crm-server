@@ -1,11 +1,21 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+} from '@nestjs/common';
 import { CallDispositionsService } from './call-dispositions.service';
 import { CreateCallDispositionDto } from './dto/create-call-disposition.dto';
 import { UpdateCallDispositionDto } from './dto/update-call-disposition.dto';
 
 @Controller('call-dispositions')
 export class CallDispositionsController {
-  constructor(private readonly callDispositionsService: CallDispositionsService) {}
+  constructor(
+    private readonly callDispositionsService: CallDispositionsService,
+  ) {}
 
   @Post()
   create(@Body() createCallDispositionDto: CreateCallDispositionDto) {
@@ -23,7 +33,10 @@ export class CallDispositionsController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateCallDispositionDto: UpdateCallDispositionDto) {
+  update(
+    @Param('id') id: string,
+    @Body() updateCallDispositionDto: UpdateCallDispositionDto,
+  ) {
     return this.callDispositionsService.update(+id, updateCallDispositionDto);
   }
 

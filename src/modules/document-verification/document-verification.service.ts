@@ -16,7 +16,10 @@ export class DocumentVerificationService {
     return `This action returns a #${id} documentVerification`;
   }
 
-  update(id: number, updateDocumentVerificationDto: UpdateDocumentVerificationDto) {
+  update(
+    id: number,
+    updateDocumentVerificationDto: UpdateDocumentVerificationDto,
+  ) {
     return `This action updates a #${id} documentVerification`;
   }
 

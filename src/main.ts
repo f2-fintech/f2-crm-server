@@ -22,7 +22,7 @@ async function bootstrap() {
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(compression());
   app.use(cookieParser());
-  
+
   // Increase payload size for large Excel pastes
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));

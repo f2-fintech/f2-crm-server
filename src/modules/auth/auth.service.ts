@@ -24,7 +24,8 @@ import { auth } from '../../common/firebase';
 export class AuthService {
   constructor(
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
-    @InjectModel(Session.name) private readonly sessionModel: Model<SessionDocument>,
+    @InjectModel(Session.name)
+    private readonly sessionModel: Model<SessionDocument>,
     private readonly jwtService: JwtService,
   ) {}
 
@@ -136,10 +137,12 @@ export class AuthService {
         throw new BadRequestException('Google token did not contain an email');
       }
 
-      let user = await this.userModel.findOne({ email }).select('+password');
+      const user = await this.userModel.findOne({ email }).select('+password');
 
       if (!user) {
-        throw new UnauthorizedException('User account not found. Sign up is disabled.');
+        throw new UnauthorizedException(
+          'User account not found. Sign up is disabled.',
+        );
       }
 
       if (!user.isActive) {
@@ -171,7 +174,10 @@ export class AuthService {
         user: userObj,
       };
     } catch (error) {
-      if (error instanceof UnauthorizedException || error instanceof BadRequestException) {
+      if (
+        error instanceof UnauthorizedException ||
+        error instanceof BadRequestException
+      ) {
         throw error;
       }
       throw new UnauthorizedException('Invalid Google token');
@@ -182,7 +188,9 @@ export class AuthService {
    * Forgot Password
    */
   async forgotPassword(dto: ForgotPasswordDto) {
-    const user = await this.userModel.findOne({ email: dto.email.toLowerCase() });
+    const user = await this.userModel.findOne({
+      email: dto.email.toLowerCase(),
+    });
     if (!user) {
       throw new NotFoundException('User not found');
     }
@@ -222,16 +230,17 @@ export class AuthService {
    * Get Profile
    */
   async getProfile(userId: string) {
-    const user = await this.userModel.findById(userId)
+    const user = await this.userModel
+      .findById(userId)
       .select('-password -refreshToken')
       .populate('roleId')
       .populate('branchId')
       .populate('departmentId');
-      
+
     if (!user) {
       throw new NotFoundException('User not found');
     }
-    
+
     return { data: user };
   }
 
@@ -245,7 +254,9 @@ export class AuthService {
     }
 
     if (dto.email && dto.email.toLowerCase() !== user.email) {
-      const existing = await this.userModel.findOne({ email: dto.email.toLowerCase() });
+      const existing = await this.userModel.findOne({
+        email: dto.email.toLowerCase(),
+      });
       if (existing) {
         throw new ConflictException('Email already in use');
       }
@@ -262,12 +273,14 @@ export class AuthService {
     if (dto.state !== undefined) (user as any).state = dto.state;
     if (dto.city !== undefined) (user as any).city = dto.city;
     if (dto.postalCode !== undefined) (user as any).postalCode = dto.postalCode;
-    if (dto.streetAddress !== undefined) (user as any).streetAddress = dto.streetAddress;
+    if (dto.streetAddress !== undefined)
+      (user as any).streetAddress = dto.streetAddress;
     if (dto.address !== undefined) (user as any).address = dto.address;
 
     await user.save();
 
-    const populatedUser = await this.userModel.findById(user._id)
+    const populatedUser = await this.userModel
+      .findById(user._id)
       .select('-password -refreshToken')
       .populate('roleId')
       .populate('branchId')

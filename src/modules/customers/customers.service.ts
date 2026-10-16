@@ -1,18 +1,33 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 
-import { Customer, CustomerStatus, CustomerDocument } from './schemas/customer.schema';
+import {
+  Customer,
+  CustomerStatus,
+  CustomerDocument,
+} from './schemas/customer.schema';
+import { Insight } from '../../common/interfaces/insight.interface';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { CustomerQueryDto } from './dto/customer-query.dto';
+import { LifecycleEventsService } from '../lifecycle-events/lifecycle-events.service';
+import {
+  LifecycleEventType,
+  LifecycleEventSource,
+} from '../lifecycle-events/enums/lifecycle.enum';
 
 @Injectable()
 export class CustomersService {
   constructor(
     @InjectModel(Customer.name)
     private readonly customerModel: Model<CustomerDocument>,
-  ) { }
+    private readonly lifecycleEventsService: LifecycleEventsService,
+  ) {}
 
   /**
    * Generate Customer ID
@@ -59,9 +74,7 @@ export class CustomersService {
       });
 
       if (emailExists) {
-        throw new ConflictException(
-          'Customer already exists with this email.',
-        );
+        throw new ConflictException('Customer already exists with this email.');
       }
     }
 
@@ -74,13 +87,23 @@ export class CustomersService {
 
     await customer.save();
 
+    await this.lifecycleEventsService.transitionStage({
+      entityType: 'Customer',
+      entityId: customer._id.toString(),
+      customerId: customer._id.toString(),
+      leadId: customer.leadId,
+      applicationId: customer.applicationId,
+      eventType: LifecycleEventType.CUSTOMER_CREATED,
+      toStage: CustomerStatus.ACTIVE,
+      source: LifecycleEventSource.CRM,
+    });
+
     return {
       success: true,
       message: 'Customer created successfully.',
       data: customer,
     };
   }
-
 
   /**
    * Get All Customers
@@ -142,8 +165,7 @@ export class CustomersService {
     if (loanType) filter.loanType = loanType;
     if (employmentType) filter.employmentType = employmentType;
     if (branchId) filter.branchId = branchId;
-    if (relationshipManager)
-      filter.relationshipManager = relationshipManager;
+    if (relationshipManager) filter.relationshipManager = relationshipManager;
 
     const skip = (page - 1) * limit;
 
@@ -151,14 +173,8 @@ export class CustomersService {
       this.customerModel
         .find(filter)
         .populate('branchId', 'branchName branchCode')
-        .populate(
-          'relationshipManager',
-          'firstName lastName employeeId',
-        )
-        .populate(
-          'createdBy',
-          'firstName lastName employeeId',
-        )
+        .populate('relationshipManager', 'firstName lastName employeeId')
+        .populate('createdBy', 'firstName lastName employeeId')
         .sort({
           [sortBy]: sortOrder === 'asc' ? 1 : -1,
         })
@@ -194,18 +210,9 @@ export class CustomersService {
         isDeleted: false,
       })
       .populate('branchId', 'branchName branchCode')
-      .populate(
-        'relationshipManager',
-        'firstName lastName employeeId',
-      )
-      .populate(
-        'createdBy',
-        'firstName lastName employeeId',
-      )
-      .populate(
-        'updatedBy',
-        'firstName lastName employeeId',
-      );
+      .populate('relationshipManager', 'firstName lastName employeeId')
+      .populate('createdBy', 'firstName lastName employeeId')
+      .populate('updatedBy', 'firstName lastName employeeId');
 
     if (!customer) {
       throw new NotFoundException('Customer not found.');
@@ -221,10 +228,7 @@ export class CustomersService {
   /**
    * Update Customer
    */
-  async update(
-    id: string,
-    updateCustomerDto: UpdateCustomerDto,
-  ) {
+  async update(id: string, updateCustomerDto: UpdateCustomerDto) {
     const customer = await this.customerModel.findOne({
       _id: id,
       isDeleted: false,
@@ -235,10 +239,7 @@ export class CustomersService {
     }
 
     // Check Duplicate Phone
-    if (
-      updateCustomerDto.phone &&
-      updateCustomerDto.phone !== customer.phone
-    ) {
+    if (updateCustomerDto.phone && updateCustomerDto.phone !== customer.phone) {
       const phoneExists = await this.customerModel.findOne({
         phone: updateCustomerDto.phone,
         _id: { $ne: id },
@@ -253,10 +254,7 @@ export class CustomersService {
     }
 
     // Check Duplicate Email
-    if (
-      updateCustomerDto.email &&
-      updateCustomerDto.email !== customer.email
-    ) {
+    if (updateCustomerDto.email && updateCustomerDto.email !== customer.email) {
       const emailExists = await this.customerModel.findOne({
         email: updateCustomerDto.email,
         _id: { $ne: id },
@@ -264,23 +262,40 @@ export class CustomersService {
       });
 
       if (emailExists) {
-        throw new ConflictException(
-          'Customer already exists with this email.',
-        );
+        throw new ConflictException('Customer already exists with this email.');
       }
     }
 
-    const updatedCustomer =
-      await this.customerModel.findByIdAndUpdate(
-        id,
-        {
-          $set: updateCustomerDto,
-        },
-        {
-          new: true,
-          runValidators: true,
-        },
-      );
+    const updatedCustomer = await this.customerModel.findByIdAndUpdate(
+      id,
+      {
+        $set: updateCustomerDto,
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
+
+    const payload = updateCustomerDto as any;
+    if (payload.status && payload.status !== customer.status) {
+      await this.lifecycleEventsService.transitionStage({
+        entityType: 'Customer',
+        entityId: customer._id.toString(),
+        customerId: customer._id.toString(),
+        leadId: customer.leadId,
+        applicationId: customer.applicationId,
+        eventType:
+          payload.status === CustomerStatus.INACTIVE
+            ? LifecycleEventType.CUSTOMER_AT_RISK
+            : payload.status === CustomerStatus.CLOSED
+              ? LifecycleEventType.CUSTOMER_OFFBOARDED
+              : LifecycleEventType.CUSTOMER_ACTIVATED,
+        fromStage: customer.status,
+        toStage: payload.status,
+        source: LifecycleEventSource.CRM,
+      });
+    }
 
     return {
       success: true,
@@ -342,6 +357,37 @@ export class CustomersService {
       }),
     ]);
 
+    const insights: Insight[] = [];
+
+    if (activeCustomers > 0) {
+      insights.push({
+        title: "Active Customers",
+        metric: activeCustomers,
+        explanation: "Customers currently active or onboarding.",
+        severity: "info"
+      });
+    }
+
+    if (inactiveCustomers > 0) {
+      insights.push({
+        title: "Inactive Customers",
+        metric: inactiveCustomers,
+        explanation: "Customers with inactive status.",
+        severity: "info",
+        action: { label: "View Inactive", href: "/customers?status=inactive" }
+      });
+    }
+
+    if (closedCustomers > 0 && totalCustomers > 0) {
+      const churnRate = Math.round((closedCustomers / totalCustomers) * 100);
+      insights.push({
+        title: "Closed Rate",
+        metric: `${churnRate}%`,
+        explanation: "Percentage of customers with closed status.",
+        severity: "info"
+      });
+    }
+
     return {
       success: true,
       data: {
@@ -349,6 +395,7 @@ export class CustomersService {
         activeCustomers,
         inactiveCustomers,
         closedCustomers,
+        insights
       },
     };
   }
@@ -363,9 +410,7 @@ export class CustomersService {
     });
 
     if (!customer) {
-      throw new NotFoundException(
-        'Customer not found.',
-      );
+      throw new NotFoundException('Customer not found.');
     }
 
     return {
@@ -377,18 +422,14 @@ export class CustomersService {
   /**
    * Get Customer By Application Id
    */
-  async getCustomerByApplicationId(
-    applicationId: string,
-  ) {
+  async getCustomerByApplicationId(applicationId: string) {
     const customer = await this.customerModel.findOne({
       applicationId,
       isDeleted: false,
     });
 
     if (!customer) {
-      throw new NotFoundException(
-        'Customer not found.',
-      );
+      throw new NotFoundException('Customer not found.');
     }
 
     return {
@@ -404,9 +445,7 @@ export class CustomersService {
     const customer = await this.customerModel.findById(id);
 
     if (!customer) {
-      throw new NotFoundException(
-        'Customer not found.',
-      );
+      throw new NotFoundException('Customer not found.');
     }
 
     customer.isDeleted = false;
@@ -427,9 +466,7 @@ export class CustomersService {
     const customer = await this.customerModel.findById(id);
 
     if (!customer) {
-      throw new NotFoundException(
-        'Customer not found.',
-      );
+      throw new NotFoundException('Customer not found.');
     }
 
     await this.customerModel.findByIdAndDelete(id);
@@ -437,6 +474,40 @@ export class CustomersService {
     return {
       success: true,
       message: 'Customer permanently deleted.',
+    };
+  }
+
+  /**
+   * Get OMS Summary for Customer
+   */
+  async getOmsSummary(id: string) {
+    const customer = await this.customerModel.findById(id);
+    if (!customer) {
+      throw new NotFoundException('Customer not found.');
+    }
+    
+    let omsData: any = null;
+    if (customer.omsId) {
+      const OMS_BASE_URL = process.env.OMS_BASE_URL || 'https://admin.f2fintech.in';
+      const OMS_COMPANY_ID = process.env.OMS_COMPANY_ID || '101';
+      try {
+        const response = await fetch(`${OMS_BASE_URL}/api/v1/get-customer-full-details/${customer.omsId}`, {
+          headers: { 'companyid': OMS_COMPANY_ID }
+        });
+        if (response.ok) {
+          omsData = await response.json();
+        }
+      } catch (err) {
+        console.error(`Failed to fetch OMS details for ${customer.omsId}: ${err}`);
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        crmCustomer: customer,
+        omsSummary: omsData?.data || null
+      }
     };
   }
 }

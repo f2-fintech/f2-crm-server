@@ -8,10 +8,7 @@ import {
   IsString,
 } from 'class-validator';
 
-import {
-  FollowUpMode,
-  FollowUpPriority,
-} from '../schemas/follow-up.schema';
+import { FollowUpMode, FollowUpPriority } from '../schemas/follow-up.schema';
 
 export class CreateFollowUpDto {
   @ApiProperty({

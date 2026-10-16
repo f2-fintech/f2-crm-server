@@ -8,10 +8,7 @@ import { Model } from 'mongoose';
 
 import { CreatePermissionDto } from './dto/create-permission.dto';
 import { UpdatePermissionDto } from './dto/update-permission.dto';
-import {
-  Permission,
-  PermissionDocument,
-} from './schemas/permission.schema';
+import { Permission, PermissionDocument } from './schemas/permission.schema';
 
 @Injectable()
 export class PermissionsService {
@@ -23,9 +20,7 @@ export class PermissionsService {
   /**
    * Create Permission
    */
-  async create(
-    createPermissionDto: CreatePermissionDto,
-  ): Promise<Permission> {
+  async create(createPermissionDto: CreatePermissionDto): Promise<Permission> {
     // Check duplicate key
     const existingKey = await this.permissionModel.findOne({
       key: createPermissionDto.key.toLowerCase(),
@@ -59,10 +54,7 @@ export class PermissionsService {
    * Get All Permissions
    */
   async findAll(): Promise<Permission[]> {
-    return this.permissionModel
-      .find()
-      .sort({ module: 1, action: 1 })
-      .exec();
+    return this.permissionModel.find().sort({ module: 1, action: 1 }).exec();
   }
 
   /**
@@ -102,19 +94,17 @@ export class PermissionsService {
         throw new ConflictException('Permission key already exists');
       }
 
-      updatePermissionDto.key =
-        updatePermissionDto.key.toLowerCase();
+      updatePermissionDto.key = updatePermissionDto.key.toLowerCase();
     }
 
-    const updatedPermission =
-      await this.permissionModel.findByIdAndUpdate(
-        id,
-        updatePermissionDto,
-        {
-          new: true,
-          runValidators: true,
-        },
-      );
+    const updatedPermission = await this.permissionModel.findByIdAndUpdate(
+      id,
+      updatePermissionDto,
+      {
+        new: true,
+        runValidators: true,
+      },
+    );
 
     return updatedPermission!;
   }

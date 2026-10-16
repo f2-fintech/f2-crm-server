@@ -1,12 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import {
-  HydratedDocument,
-  Schema as MongooseSchema,
-  Types,
-} from 'mongoose';
+import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 
-export type TimelineDocument =
-  HydratedDocument<Timeline>;
+export type TimelineDocument = HydratedDocument<Timeline>;
 
 export enum TimelineType {
   LEAD = 'LEAD',
@@ -84,5 +79,4 @@ export class Timeline {
   isDeleted: boolean;
 }
 
-export const TimelineSchema =
-  SchemaFactory.createForClass(Timeline);
+export const TimelineSchema = SchemaFactory.createForClass(Timeline);

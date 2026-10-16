@@ -21,7 +21,9 @@ if (!getApps().length) {
       });
       authInstance = getAuth();
     } else {
-      console.warn('Firebase config missing in .env. Google Login will be disabled.');
+      console.warn(
+        'Firebase config missing in .env. Google Login will be disabled.',
+      );
     }
   } catch (error) {
     console.error('Firebase admin initialization error', error);
@@ -45,9 +47,9 @@ export const auth = authInstance || {
       }
       const payload = Buffer.from(b64, 'base64').toString('utf8');
       const data = JSON.parse(payload);
-      
+
       if (!data.email) {
-         throw new Error('No email in token');
+        throw new Error('No email in token');
       }
       return data;
     } catch (error: any) {

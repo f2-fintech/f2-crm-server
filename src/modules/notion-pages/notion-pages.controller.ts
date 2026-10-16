@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Body, Param, Patch, Delete, UseGuards, Req } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  Patch,
+  Delete,
+  UseGuards,
+  Req,
+} from '@nestjs/common';
 import { NotionPagesService } from './notion-pages.service';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
@@ -41,11 +51,16 @@ export class CloneFormatDto {
 @Controller('notion-pages')
 @UseGuards(AuthGuard('jwt'))
 export class NotionPagesController {
-  constructor(private readonly pagesService: NotionPagesService) {}
+  constructor(private readonly pagesService: NotionPagesService) { }
 
   @Get('tree')
   getTree(@Req() req: Request) {
     return this.pagesService.getTree(req.user);
+  }
+
+  @Get('dashboard-stats')
+  getDashboardStats(@Req() req: Request) {
+    return this.pagesService.getDashboardStats(req.user);
   }
 
   @Post('accept-invite')
@@ -84,7 +99,11 @@ export class NotionPagesController {
   }
 
   @Patch(':id')
-  updatePage(@Param('id') id: string, @Body() updateData: UpdateNotionPageDto, @Req() req: Request) {
+  updatePage(
+    @Param('id') id: string,
+    @Body() updateData: UpdateNotionPageDto,
+    @Req() req: Request,
+  ) {
     return this.pagesService.updatePage(id, updateData, req.user);
   }
 

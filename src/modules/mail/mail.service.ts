@@ -11,15 +11,23 @@ export class MailService {
     private readonly mailerService: MailerService,
     private readonly configService: ConfigService,
   ) {
-    this.appUrl = this.configService.get<string>('FRONTEND_URL', 'http://localhost:3000');
+    this.appUrl = this.configService.get<string>(
+      'FRONTEND_URL',
+      'http://localhost:3000',
+    );
   }
 
   /**
    * Sends an email notification when a Notion page is assigned to a user.
    */
-  async sendPageAssignmentEmail(userEmail: string, userName: string, pageTitle: string, pageId: string) {
+  async sendPageAssignmentEmail(
+    userEmail: string,
+    userName: string,
+    pageTitle: string,
+    pageId: string,
+  ) {
     const pageUrl = `${this.appUrl}/notion-pages?page=${pageId}`;
-    
+
     try {
       await this.mailerService.sendMail({
         to: userEmail,
@@ -44,7 +52,10 @@ export class MailService {
       });
       this.logger.log(`Assignment email sent successfully to ${userEmail}`);
     } catch (error) {
-      this.logger.error(`Failed to send assignment email to ${userEmail}`, error);
+      this.logger.error(
+        `Failed to send assignment email to ${userEmail}`,
+        error,
+      );
     }
   }
 
@@ -53,7 +64,7 @@ export class MailService {
    */
   async sendPageInviteEmail(email: string, token: string) {
     const inviteUrl = `${this.appUrl}/notion-pages?token=${token}`;
-    
+
     try {
       await this.mailerService.sendMail({
         to: email,

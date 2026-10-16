@@ -5,10 +5,7 @@ import {
   IsOptional,
 } from 'class-validator';
 
-import {
-  TimelineAction,
-  TimelineType,
-} from '../schemas/timeline.schemas';
+import { TimelineAction, TimelineType } from '../schemas/timeline.schemas';
 
 export class TimelineQueryDto {
   @IsOptional()

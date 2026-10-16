@@ -20,9 +20,7 @@ export class BranchesService {
   /**
    * Create Branch
    */
-  async create(
-    createBranchDto: CreateBranchDto,
-  ): Promise<Branch> {
+  async create(createBranchDto: CreateBranchDto): Promise<Branch> {
     // Check duplicate Branch Code
     const existingCode = await this.branchModel.findOne({
       branchCode: createBranchDto.branchCode.toUpperCase(),
@@ -53,10 +51,7 @@ export class BranchesService {
    * Get All Branches
    */
   async findAll(): Promise<Branch[]> {
-    return this.branchModel
-      .find()
-      .sort({ createdAt: -1 })
-      .exec();
+    return this.branchModel.find().sort({ createdAt: -1 }).exec();
   }
 
   /**
@@ -75,10 +70,7 @@ export class BranchesService {
   /**
    * Update Branch
    */
-  async update(
-    id: string,
-    updateBranchDto: UpdateBranchDto,
-  ): Promise<Branch> {
+  async update(id: string, updateBranchDto: UpdateBranchDto): Promise<Branch> {
     const branch = await this.branchModel.findById(id);
 
     if (!branch) {
@@ -96,8 +88,7 @@ export class BranchesService {
         throw new ConflictException('Branch code already exists');
       }
 
-      updateBranchDto.branchCode =
-        updateBranchDto.branchCode.toUpperCase();
+      updateBranchDto.branchCode = updateBranchDto.branchCode.toUpperCase();
     }
 
     // Duplicate Branch Name Check
@@ -127,9 +118,7 @@ export class BranchesService {
   /**
    * Delete Branch
    */
-  async remove(
-    id: string,
-  ): Promise<{ message: string }> {
+  async remove(id: string): Promise<{ message: string }> {
     const branch = await this.branchModel.findById(id);
 
     if (!branch) {

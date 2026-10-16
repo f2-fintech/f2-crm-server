@@ -11,7 +11,9 @@ describe('CampaignIntelligenceController', () => {
       providers: [CampaignIntelligenceService],
     }).compile();
 
-    controller = module.get<CampaignIntelligenceController>(CampaignIntelligenceController);
+    controller = module.get<CampaignIntelligenceController>(
+      CampaignIntelligenceController,
+    );
   });
 
   it('should be defined', () => {

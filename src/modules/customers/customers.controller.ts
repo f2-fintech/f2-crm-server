@@ -18,7 +18,7 @@ import { CustomerQueryDto } from './dto/customer-query.dto';
 @ApiTags('Customers')
 @Controller('customers')
 export class CustomersController {
-  constructor(private readonly customersService: CustomersService) { }
+  constructor(private readonly customersService: CustomersService) {}
 
   @Post()
   @ApiOperation({ summary: 'Create Customer' })
@@ -48,16 +48,12 @@ export class CustomersController {
   }
 
   @Get('lead/:leadId')
-  getCustomerByLeadId(
-    @Param('leadId') leadId: string,
-  ) {
+  getCustomerByLeadId(@Param('leadId') leadId: string) {
     return this.customersService.getCustomerByLeadId(leadId);
   }
 
   @Get('application/:applicationId')
-  getCustomerByApplicationId(
-    @Param('applicationId') applicationId: string,
-  ) {
+  getCustomerByApplicationId(@Param('applicationId') applicationId: string) {
     return this.customersService.getCustomerByApplicationId(applicationId);
   }
 
@@ -100,10 +96,6 @@ export class CustomersController {
     return this.customersService.remove(id);
   }
 
-
-
-
-
   @Patch(':id/restore')
   restoreCustomer(@Param('id') id: string) {
     return this.customersService.restoreCustomer(id);
@@ -114,4 +106,11 @@ export class CustomersController {
     return this.customersService.permanentDelete(id);
   }
 
+  @Get(':id/oms-summary')
+  @ApiOperation({
+    summary: 'Get OMS Summary for Customer (Client 360)',
+  })
+  getOmsSummary(@Param('id') id: string) {
+    return this.customersService.getOmsSummary(id);
+  }
 }

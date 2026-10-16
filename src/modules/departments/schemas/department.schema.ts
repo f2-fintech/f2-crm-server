@@ -45,5 +45,4 @@ export class Department {
   isActive: boolean;
 }
 
-export const DepartmentSchema =
-  SchemaFactory.createForClass(Department);
+export const DepartmentSchema = SchemaFactory.createForClass(Department);

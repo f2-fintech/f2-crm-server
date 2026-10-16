@@ -8,10 +8,7 @@ import {
   IsString,
 } from 'class-validator';
 
-import {
-  ActivityStatus,
-  ActivityType,
-} from '../schema/activity.schema';
+import { ActivityStatus, ActivityType } from '../schema/activity.schema';
 
 export class CreateActivityDto {
   @IsMongoId()

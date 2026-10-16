@@ -14,17 +14,13 @@ import { UpdateBranchDto } from './dto/update-branch.dto';
 
 @Controller('branches')
 export class BranchesController {
-  constructor(
-    private readonly branchesService: BranchesService,
-  ) {}
+  constructor(private readonly branchesService: BranchesService) {}
 
   /**
    * Create Branch
    */
   @Post()
-  async create(
-    @Body() createBranchDto: CreateBranchDto,
-  ) {
+  async create(@Body() createBranchDto: CreateBranchDto) {
     return await this.branchesService.create(createBranchDto);
   }
 
@@ -52,10 +48,7 @@ export class BranchesController {
     @Param('id') id: string,
     @Body() updateBranchDto: UpdateBranchDto,
   ) {
-    return await this.branchesService.update(
-      id,
-      updateBranchDto,
-    );
+    return await this.branchesService.update(id, updateBranchDto);
   }
 
   /**

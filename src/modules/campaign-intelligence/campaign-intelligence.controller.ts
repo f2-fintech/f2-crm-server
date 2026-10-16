@@ -1,15 +1,27 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+} from '@nestjs/common';
 import { CampaignIntelligenceService } from './campaign-intelligence.service';
 import { CreateCampaignIntelligenceDto } from './dto/create-campaign-intelligence.dto';
 import { UpdateCampaignIntelligenceDto } from './dto/update-campaign-intelligence.dto';
 
 @Controller('campaign-intelligence')
 export class CampaignIntelligenceController {
-  constructor(private readonly campaignIntelligenceService: CampaignIntelligenceService) {}
+  constructor(
+    private readonly campaignIntelligenceService: CampaignIntelligenceService,
+  ) {}
 
   @Post()
   create(@Body() createCampaignIntelligenceDto: CreateCampaignIntelligenceDto) {
-    return this.campaignIntelligenceService.create(createCampaignIntelligenceDto);
+    return this.campaignIntelligenceService.create(
+      createCampaignIntelligenceDto,
+    );
   }
 
   @Get()
@@ -23,8 +35,14 @@ export class CampaignIntelligenceController {
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateCampaignIntelligenceDto: UpdateCampaignIntelligenceDto) {
-    return this.campaignIntelligenceService.update(+id, updateCampaignIntelligenceDto);
+  update(
+    @Param('id') id: string,
+    @Body() updateCampaignIntelligenceDto: UpdateCampaignIntelligenceDto,
+  ) {
+    return this.campaignIntelligenceService.update(
+      +id,
+      updateCampaignIntelligenceDto,
+    );
   }
 
   @Delete(':id')

@@ -4,10 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { NotesController } from './notes.controller';
 import { NotesService } from './notes.service';
 
-import {
-  Note,
-  NoteSchema,
-} from './schema/note.schema';
+import { Note, NoteSchema } from './schema/note.schema';
 
 @Module({
   imports: [
