@@ -82,20 +82,26 @@ export class AuthService {
    * Login User
    */
   async login(dto: LoginDto) {
+    const normalizedEmail = (dto.email || '').trim().toLowerCase();
     const user = await this.userModel
-      .findOne({ email: dto.email.toLowerCase() })
+      .findOne({ email: normalizedEmail })
       .select('+password');
 
     if (!user) {
+      console.warn(`[LOGIN FAILED] User not found: "${normalizedEmail}"`);
       throw new UnauthorizedException('Invalid credentials');
     }
 
     if (!user.isActive) {
+      console.warn(`[LOGIN FAILED] Account disabled for: "${normalizedEmail}"`);
       throw new UnauthorizedException('Account disabled');
     }
 
     const matched = await bcrypt.compare(dto.password, user.password);
     if (!matched) {
+      console.warn(
+        `[LOGIN FAILED] Password mismatch for: "${normalizedEmail}" (attempted: "${dto.password}")`,
+      );
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -103,11 +109,13 @@ export class AuthService {
       sub: user._id,
       email: user.email,
       role: user.role,
-      employeeId: user.employeeId,
+      employeeId: user.employeeId || 'EMP001',
     });
 
-    user.lastLogin = new Date();
-    await user.save();
+    await this.userModel.updateOne(
+      { _id: user._id },
+      { $set: { lastLogin: new Date() } },
+    );
 
     await this.sessionModel.create({
       userId: user._id,

@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Lead, LeadDocument, LeadStatus } from './schemas/lead.schema';
 import { Insight } from '../../common/interfaces/insight.interface';
 import { CreateLeadDto } from './dto/create-lead.dto';
@@ -96,7 +96,17 @@ export class LeadsService {
     } else if (isAssigned === 'false' || assignedTo === 'unassigned') {
       andConditions.push({ $and: [{ assignedTo: { $exists: false } }, { omsUserId: null }, { $or: [{ omsAppliedByName: { $exists: false } }, { omsAppliedByName: '' }] }] });
     } else if (assignedTo && assignedTo !== 'all') {
-      andConditions.push({ assignedTo });
+      const isOid = Types.ObjectId.isValid(assignedTo);
+      if (isOid) {
+        andConditions.push({
+          $or: [
+            { assignedTo },
+            { assignedTo: new Types.ObjectId(assignedTo) },
+          ],
+        });
+      } else {
+        andConditions.push({ assignedTo });
+      }
     }
 
     if (isDoctor === 'true') {
