@@ -29,6 +29,7 @@ import { TimelineModule } from './modules/timeline/timeline.module';
 import { LifecycleEventsModule } from './modules/lifecycle-events/lifecycle-events.module';
 import { StageHistoryModule } from './modules/stage-history/stage-history.module';
 import { AiSummaryModule } from './modules/ai-summary/ai-summary.module';
+import { DriveAllocationModule } from './modules/drive-allocation/drive-allocation.module';
 
 @Module({
   imports: [
@@ -76,6 +77,7 @@ import { AiSummaryModule } from './modules/ai-summary/ai-summary.module';
     LifecycleEventsModule,
     StageHistoryModule,
     AiSummaryModule,
+    DriveAllocationModule,
   ],
   controllers: [AppController],
   providers: [AppService],
