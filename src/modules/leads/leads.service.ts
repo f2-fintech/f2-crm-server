@@ -219,13 +219,40 @@ export class LeadsService {
           }
         },
         {
+          $lookup: {
+            from: "users",
+            let: { uid: "$assignedTo" },
+            pipeline: [
+              {
+                $match: {
+                  $expr: {
+                    $or: [
+                      { $eq: ["$_id", "$$uid"] },
+                      { $eq: [{ $toString: "$_id" }, { $toString: "$$uid" }] }
+                    ]
+                  }
+                }
+              },
+              { $project: { firstName: 1, lastName: 1, email: 1, role: 1 } }
+            ],
+            as: "assignedUserArr"
+          }
+        },
+        {
           $addFields: {
+            assignedTo: {
+              $cond: {
+                if: { $gt: [{ $size: "$assignedUserArr" }, 0] },
+                then: { $arrayElemAt: ["$assignedUserArr", 0] },
+                else: null
+              }
+            },
             touchpointsCount: { $size: "$timelineItems" },
             latestTimelineItem: { $arrayElemAt: ["$timelineItems", -1] },
             id: { $toString: "$_id" }
           }
         },
-        { $project: { timelineItems: 0 } }
+        { $project: { timelineItems: 0, assignedUserArr: 0 } }
       ]),
       this.leadModel.countDocuments(finalFilter),
     ]);
@@ -646,16 +673,59 @@ export class LeadsService {
         const leadSource = item.applicationSource || item.source || item.leadType || 'OMS';
 
         const agentMap: Record<number, string> = {
+          26: 'Manoj Kumar',
+          38: 'Rashi Gangwar',
+          39: 'Ravish Sharma',
           42: 'Riya Chaddha',
-          103: 'Sumit Kumar',
           45: 'Anil',
+          61: 'Dharmveer Kumar',
           63: 'Amit Kumar',
+          67: 'Gaurav Vaidh',
+          74: 'Hirdesh Kumar',
+          78: 'Harsh Sharma',
+          81: 'Sumit Chaudhary',
+          88: 'Sumit Chaudhary',
+          90: 'Shivam Agnihotri',
+          94: 'Harsh Sharma',
+          95: 'Shivam Sharma',
+          97: 'Shagun Saini',
+          98: 'Shrutika Dubey',
           99: 'Samreen Khan',
+          103: 'Sumit Kumar',
+          104: 'Aleena Khan',
+          105: 'Ankush Yadav',
+          106: 'Swati Kumari',
+          108: 'Ajay Bariyal',
+          109: 'Gungun Singh',
+          111: 'Neha Choudhary',
+          112: 'Tarun Jauhari',
+          114: 'Mohd Shalim',
+          119: 'Himansh Kakkar',
         };
-        const omsAppliedByName =
+
+        let omsAppliedByName =
           item.appliedBy && agentMap[item.appliedBy]
             ? agentMap[item.appliedBy]
             : item.appliedByName || '';
+
+        // If appliedByName is still missing, fetch from ticket details dynamically
+        if (!omsAppliedByName && item.appliedBy && omsTicketId) {
+          try {
+            const detailRes = await fetch(`${OMS_BASE_URL}/api/v1/get-ticket-with-detail/${omsTicketId}`, {
+              headers: { companyid: OMS_COMPANY_ID, Accept: 'application/json' },
+              signal: AbortSignal.timeout(4000),
+            });
+            if (detailRes.ok) {
+              const d = await detailRes.json();
+              if (d?.data?.appliedByName && d.data.appliedByName !== 'N/A') {
+                omsAppliedByName = d.data.appliedByName;
+                agentMap[item.appliedBy] = omsAppliedByName;
+              }
+            }
+          } catch {
+            // fallback
+          }
+        }
 
         if (!existingLead) {
           const leadId = 'L' + Date.now().toString() + Math.floor(Math.random() * 1000);
@@ -716,7 +786,7 @@ export class LeadsService {
           existingLead.omsDisbursedAmount = omsDisbursedAmount;
           existingLead.omsUserId = omsUserId;
           existingLead.omsTicketId = omsTicketId;
-          existingLead.omsAppliedByName = omsAppliedByName;
+          if (omsAppliedByName) existingLead.omsAppliedByName = omsAppliedByName;
           existingLead.omsProvider = omsProvider;
           existingLead.omsTenure = omsTenure;
           existingLead.omsLeadType = omsLeadType;

@@ -730,17 +730,38 @@ export class DriveAllocationService {
     // 7. Custom Column Filter
     if (query.customColumn && query.customValue && query.customValue.trim()) {
       const col = query.customColumn.trim();
-      const val = query.customValue.trim().toLowerCase();
-      const cellVal = String(rec.rawData[col] || '').toLowerCase();
-      if (!cellVal.includes(val)) return false;
+      const isAmountCol = /(amount|eligib|loan|limit|salary|income)/i.test(col);
+      // Skip text match if numeric range is being applied
+      if (!isAmountCol || (query.minAmount === undefined && query.maxAmount === undefined)) {
+        const val = query.customValue.trim().toLowerCase();
+        const cellVal = String(rec.rawData?.[col] || '').toLowerCase();
+        let matched = cellVal.includes(val);
+        if (!matched) {
+          const colLower = col.toLowerCase();
+          if (colLower.includes('city') || colLower.includes('branch') || colLower.includes('district')) {
+            matched = (rec.branch || '').toLowerCase().includes(val);
+          } else if (colLower.includes('state')) {
+            matched = (rec.state || '').toLowerCase().includes(val);
+          } else if (colLower.includes('name')) {
+            matched = (rec.customerName || '').toLowerCase().includes(val);
+          } else if (colLower.includes('phone') || colLower.includes('mobile')) {
+            matched = (rec.phone || '').toLowerCase().includes(val) || (rec.cleanPhone || '').includes(val);
+          }
+        }
+        if (!matched) return false;
+      }
     }
 
-    // 8. Eligibility Amount
-    if (query.minAmount !== undefined && Number(query.minAmount) > 0) {
-      if (rec.eligibilityAmount < Number(query.minAmount)) return false;
-    }
-    if (query.maxAmount !== undefined && Number(query.maxAmount) > 0) {
-      if (rec.eligibilityAmount > Number(query.maxAmount)) return false;
+    // 8. Eligibility Amount Range (Itna se Itna Amount)
+    const hasMinAmount = query.minAmount !== undefined && Number(query.minAmount) > 0;
+    const hasMaxAmount = query.maxAmount !== undefined && Number(query.maxAmount) > 0;
+    if (hasMinAmount || hasMaxAmount) {
+      let recAmount = rec.eligibilityAmount;
+      if (!recAmount && query.customColumn && rec.rawData?.[query.customColumn]) {
+        recAmount = Number(String(rec.rawData[query.customColumn]).replace(/[^0-9.-]+/g, '')) || 0;
+      }
+      if (hasMinAmount && recAmount < Number(query.minAmount)) return false;
+      if (hasMaxAmount && recAmount > Number(query.maxAmount)) return false;
     }
 
     // 9. Global Search
@@ -887,6 +908,7 @@ export class DriveAllocationService {
     minAmount: number;
     maxAmount: number;
     totalAvailable: number;
+    columnUniqueValues?: Record<string, string[]>;
   }> {
     const cached = await this.getFileCachedData(fileId);
 
@@ -899,6 +921,12 @@ export class DriveAllocationService {
     const yearsSet = new Set<string>();
     const categoriesSet = new Set<string>();
     const lendersSet = new Set<string>();
+    const columnValuesMap = new Map<string, Set<string>>();
+    if (cached.headers) {
+      for (const h of cached.headers) {
+        columnValuesMap.set(h, new Set<string>());
+      }
+    }
     let hasCibil = false;
     let minAmount = 0;
     let maxAmount = 0;
@@ -908,6 +936,22 @@ export class DriveAllocationService {
       if (allocatedRowIndices.has(rec.rowIndex)) continue;
       if (rec.cleanPhone && allocatedPhones.has(rec.cleanPhone)) continue;
       availableCount++;
+
+      // Track unique values for every dynamic column
+      if (cached.headers && cached.headers.length > 0 && rec.rawData) {
+        for (const h of cached.headers) {
+          const rawVal = rec.rawData[h];
+          if (rawVal !== undefined && rawVal !== null) {
+            const str = String(rawVal).trim();
+            if (str && str !== '--' && str.length <= 60) {
+              const s = columnValuesMap.get(h);
+              if (s && s.size < 500) {
+                s.add(str);
+              }
+            }
+          }
+        }
+      }
 
       // Amount
       if (rec.eligibilityAmount > 0) {
@@ -1025,6 +1069,13 @@ export class DriveAllocationService {
     );
     const lenders = Array.from(lendersSet).sort((a, b) => a.localeCompare(b));
 
+    const columnUniqueValues: Record<string, string[]> = {};
+    for (const [col, s] of columnValuesMap.entries()) {
+      columnUniqueValues[col] = Array.from(s).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }),
+      );
+    }
+
     return {
       headers: cached.headers,
       cities,
@@ -1036,6 +1087,7 @@ export class DriveAllocationService {
       minAmount,
       maxAmount,
       totalAvailable: availableCount,
+      columnUniqueValues,
     };
   }
 
