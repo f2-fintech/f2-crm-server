@@ -28,6 +28,13 @@ export class NotionPagesService implements OnModuleInit {
     private readonly mailService: MailService,
   ) { }
 
+  private remarksCache: { data: any; timestamp: number } | null = null;
+  private readonly REMARKS_CACHE_TTL = 90 * 1000; // 90 seconds in-memory cache
+
+  public invalidateRemarksCache() {
+    this.remarksCache = null;
+  }
+
   async onModuleInit() {
     try {
       console.log('Building NotionPage indexes for performance...');
@@ -915,6 +922,11 @@ export class NotionPagesService implements OnModuleInit {
       throw new ForbiddenException('Only admins can view unified remarks');
     }
 
+    const now = Date.now();
+    if (this.remarksCache && now - this.remarksCache.timestamp < this.REMARKS_CACHE_TTL) {
+      return this.remarksCache.data;
+    }
+
     const pages = await this.pageModel
       .find({ isDeleted: false, pageType: 'SHEET' })
       .select('title columns rows createdAt teamId assignedMemberId')
@@ -922,7 +934,7 @@ export class NotionPagesService implements OnModuleInit {
       .populate('assignedMemberId', 'firstName lastName')
       .lean();
 
-    return pages
+    const result = pages
       .map((page: any) => {
         const teamObj: any = page.teamId;
         const memberObj: any = page.assignedMemberId;
@@ -993,8 +1005,8 @@ export class NotionPagesService implements OnModuleInit {
         });
 
         // Map ONLY the rows that have remarks to human-readable objects
-        // Limit to latest 300 remarks per sheet to prevent huge JSON payload transfers
-        const mappedRows = rowsWithRemarksRaw.slice(-300).map((row: any) => {
+        // Limit to latest 50 remarks per sheet to keep JSON payload lean and fast
+        const mappedRows = rowsWithRemarksRaw.slice(-50).map((row: any) => {
           const readable: Record<string, any> = { _rowId: row.id };
           Object.entries(row).forEach(([key, value]) => {
             if (key === 'id') return;
@@ -1028,6 +1040,9 @@ export class NotionPagesService implements OnModuleInit {
         };
       })
       .filter((p) => p.totalRows > 0);
+
+    this.remarksCache = { data: result, timestamp: Date.now() };
+    return result;
   }
 
   async getDashboardStats(user: any) {
