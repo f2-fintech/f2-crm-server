@@ -659,6 +659,7 @@ export class DriveAllocationService {
       customValue?: string;
       minAmount?: number;
       maxAmount?: number;
+      filters?: any;
     },
   ): boolean {
     // 1. City / Branch / District filter
@@ -762,6 +763,76 @@ export class DriveAllocationService {
       }
       if (hasMinAmount && recAmount < Number(query.minAmount)) return false;
       if (hasMaxAmount && recAmount > Number(query.maxAmount)) return false;
+    }
+
+    // 8.5 Multi-Column Dynamic Filters (AND logic across all active filters)
+    if (query.filters) {
+      let filterList: Array<{
+        column?: string;
+        value?: string;
+        minAmount?: number;
+        maxAmount?: number;
+      }> = [];
+
+      if (typeof query.filters === 'string') {
+        try {
+          filterList = JSON.parse(query.filters);
+        } catch {
+          filterList = [];
+        }
+      } else if (Array.isArray(query.filters)) {
+        filterList = query.filters;
+      }
+
+      for (const flt of filterList) {
+        if (!flt || !flt.column) continue;
+        const col = flt.column.trim();
+        const isAmountCol = /(amount|eligib|loan|limit|salary|income)/i.test(col);
+
+        // Numeric range check for amount columns
+        if (
+          isAmountCol &&
+          (flt.minAmount !== undefined || flt.maxAmount !== undefined)
+        ) {
+          let recAmount = rec.eligibilityAmount;
+          if (!recAmount && rec.rawData?.[col]) {
+            recAmount =
+              Number(String(rec.rawData[col]).replace(/[^0-9.-]+/g, '')) || 0;
+          }
+          if (flt.minAmount !== undefined && recAmount < Number(flt.minAmount)) {
+            return false;
+          }
+          if (flt.maxAmount !== undefined && recAmount > Number(flt.maxAmount)) {
+            return false;
+          }
+        } else if (flt.value && String(flt.value).trim()) {
+          const val = String(flt.value).trim().toLowerCase();
+          const cellVal = String(rec.rawData?.[col] ?? '').toLowerCase();
+          let matched = cellVal.includes(val);
+          if (!matched) {
+            const colLower = col.toLowerCase();
+            if (
+              colLower.includes('city') ||
+              colLower.includes('branch') ||
+              colLower.includes('district')
+            ) {
+              matched = (rec.branch || '').toLowerCase().includes(val);
+            } else if (colLower.includes('state')) {
+              matched = (rec.state || '').toLowerCase().includes(val);
+            } else if (colLower.includes('name')) {
+              matched = (rec.customerName || '').toLowerCase().includes(val);
+            } else if (
+              colLower.includes('phone') ||
+              colLower.includes('mobile')
+            ) {
+              matched =
+                (rec.phone || '').toLowerCase().includes(val) ||
+                (rec.cleanPhone || '').includes(val);
+            }
+          }
+          if (!matched) return false;
+        }
+      }
     }
 
     // 9. Global Search
@@ -1110,6 +1181,7 @@ export class DriveAllocationService {
       customValue?: string;
       minAmount?: number;
       maxAmount?: number;
+      filters?: any;
     } = {},
   ): Promise<{
     data: any[];
@@ -1389,6 +1461,7 @@ export class DriveAllocationService {
             customValue: dto.customValue,
             minAmount: dto.minAmount,
             maxAmount: dto.maxAmount,
+            filters: dto.filters,
           })
         ) {
           targetRecords.push(rec);

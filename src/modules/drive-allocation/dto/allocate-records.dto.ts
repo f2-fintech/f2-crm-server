@@ -73,4 +73,7 @@ export class AllocateRecordsDto {
   @IsString()
   @IsOptional()
   customValue?: string;
+
+  @IsOptional()
+  filters?: any;
 }

@@ -89,6 +89,7 @@ export class DriveAllocationController {
     @Query('customValue') customValue?: string,
     @Query('minAmount') minAmount?: number,
     @Query('maxAmount') maxAmount?: number,
+    @Query('filters') filters?: string,
   ) {
     return await this.driveAllocationService.getAvailableRecords(fileId, {
       page,
@@ -104,6 +105,7 @@ export class DriveAllocationController {
       customValue,
       minAmount,
       maxAmount,
+      filters,
     });
   }
 
