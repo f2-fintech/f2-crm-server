@@ -79,4 +79,5 @@ async function bootstrap() {
   console.log(`📚 Swagger Docs at   : http://localhost:${port}/api/docs`);
 }
 
+// Bootstrap application
 bootstrap();

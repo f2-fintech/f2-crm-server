@@ -3,40 +3,26 @@ import {
   Get,
   Post,
   Body,
-  Patch,
-  Param,
-  Delete,
+  Query,
 } from '@nestjs/common';
+import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { DialerService } from './dialer.service';
-import { CreateDialerDto } from './dto/create-dialer.dto';
-import { UpdateDialerDto } from './dto/update-dialer.dto';
+import { GetCallLogsDto } from './dto/get-call-logs.dto';
 
+@ApiTags('Dialer')
 @Controller('dialer')
 export class DialerController {
   constructor(private readonly dialerService: DialerService) {}
 
-  @Post()
-  create(@Body() createDialerDto: CreateDialerDto) {
-    return this.dialerService.create(createDialerDto);
+  @Get('call-logs')
+  @ApiOperation({ summary: 'Get call log data from dialer API' })
+  async getCallLogs(@Query() query: GetCallLogsDto) {
+    return await this.dialerService.getCallLogs(query);
   }
 
-  @Get()
-  findAll() {
-    return this.dialerService.findAll();
-  }
-
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.dialerService.findOne(+id);
-  }
-
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateDialerDto: UpdateDialerDto) {
-    return this.dialerService.update(+id, updateDialerDto);
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.dialerService.remove(+id);
+  @Post('call-logs')
+  @ApiOperation({ summary: 'Query call log data with custom filter body' })
+  async postCallLogs(@Body() body: GetCallLogsDto) {
+    return await this.dialerService.getCallLogs(body);
   }
 }
