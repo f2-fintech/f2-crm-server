@@ -89,14 +89,38 @@ export class DialerService {
         limit: dto.limit || 100,
       };
 
-      const response = await fetch(this.getApiUrl(), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: this.getAuthToken(),
-        },
-        body: JSON.stringify(payload),
-      });
+      let response: Response;
+      const primaryUrl = this.getApiUrl();
+      const localUrl = 'http://192.168.1.220/crm/adminapi/getCallLogData';
+
+      try {
+        response = await fetch(primaryUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: this.getAuthToken(),
+            'Bypass-Tunnel-Reminder': 'true',
+          },
+          body: JSON.stringify(payload),
+        });
+      } catch (primaryErr: any) {
+        if (primaryUrl !== localUrl) {
+          this.logger.warn(
+            `Primary dialer URL (${primaryUrl}) failed: ${primaryErr.message}. Trying local fallback (${localUrl})...`,
+          );
+          response = await fetch(localUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: this.getAuthToken(),
+              'Bypass-Tunnel-Reminder': 'true',
+            },
+            body: JSON.stringify(payload),
+          });
+        } else {
+          throw primaryErr;
+        }
+      }
 
       if (!response.ok) {
         throw new HttpException(
