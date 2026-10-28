@@ -50,6 +50,12 @@ export class User {
   phone?: string;
 
   @Prop({
+    required: false,
+    trim: true,
+  })
+  dialerExtension?: string;
+
+  @Prop({
     required: true,
     select: false,
   })
