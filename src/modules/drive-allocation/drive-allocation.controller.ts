@@ -72,6 +72,23 @@ export class DriveAllocationController {
   }
 
   @Roles('SUPER_ADMIN', 'ADMIN', 'MANAGER')
+  @ApiOperation({ summary: 'Search unique values for a column directly from backend' })
+  @Get('column-values/:fileId')
+  async searchColumnValues(
+    @Param('fileId') fileId: string,
+    @Query('column') column: string,
+    @Query('search') search?: string,
+    @Query('limit') limit?: number,
+  ) {
+    return await this.driveAllocationService.searchColumnValues(
+      fileId,
+      column,
+      search,
+      limit,
+    );
+  }
+
+  @Roles('SUPER_ADMIN', 'ADMIN', 'MANAGER')
   @ApiOperation({ summary: 'Get Available unallocated records for a file' })
   @Get('available/:fileId')
   async getAvailableRecords(
@@ -89,6 +106,7 @@ export class DriveAllocationController {
     @Query('customValue') customValue?: string,
     @Query('minAmount') minAmount?: number,
     @Query('maxAmount') maxAmount?: number,
+    @Query('filters') filters?: string,
   ) {
     return await this.driveAllocationService.getAvailableRecords(fileId, {
       page,
@@ -104,6 +122,7 @@ export class DriveAllocationController {
       customValue,
       minAmount,
       maxAmount,
+      filters,
     });
   }
 

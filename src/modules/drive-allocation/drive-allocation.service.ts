@@ -659,53 +659,94 @@ export class DriveAllocationService {
       customValue?: string;
       minAmount?: number;
       maxAmount?: number;
+      filters?: any;
     },
   ): boolean {
-    // 1. City / Branch / District filter
+    // 1. City / Branch / District filter (supports multiple comma-separated cities)
     if (query.city && query.city.trim() && query.city !== 'ALL') {
-      const c = query.city.trim().toLowerCase();
-      const cityMatched =
-        rec.branch.toLowerCase().includes(c) ||
-        String(rec.rawData.City || '').toLowerCase().includes(c) ||
-        String(rec.rawData.CITY || '').toLowerCase().includes(c) ||
-        String(rec.rawData.Branch || '').toLowerCase().includes(c) ||
-        String(rec.rawData.DISTRICT || '').toLowerCase().includes(c) ||
-        String(rec.rawData.District || '').toLowerCase().includes(c);
-      if (!cityMatched) return false;
+      const cityTargets = query.city
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      if (cityTargets.length > 0) {
+        const branchVal = rec.branch.toLowerCase();
+        const rawCity = String(rec.rawData.City || '').toLowerCase();
+        const rawCITY = String(rec.rawData.CITY || '').toLowerCase();
+        const rawBranch = String(rec.rawData.Branch || '').toLowerCase();
+        const rawDISTRICT = String(rec.rawData.DISTRICT || '').toLowerCase();
+        const rawDistrict = String(rec.rawData.District || '').toLowerCase();
+
+        const cityMatched = cityTargets.some(
+          (c) =>
+            branchVal.includes(c) ||
+            rawCity.includes(c) ||
+            rawCITY.includes(c) ||
+            rawBranch.includes(c) ||
+            rawDISTRICT.includes(c) ||
+            rawDistrict.includes(c),
+        );
+        if (!cityMatched) return false;
+      }
     }
 
-    // 2. State filter
+    // 2. State filter (supports multiple comma-separated states)
     if (query.state && query.state.trim() && query.state !== 'ALL') {
-      const s = query.state.trim().toLowerCase();
-      const stateMatched =
-        rec.state.toLowerCase().includes(s) ||
-        String(rec.rawData.State || '').toLowerCase().includes(s) ||
-        String(rec.rawData.STATE || '').toLowerCase().includes(s);
-      if (!stateMatched) return false;
+      const stateTargets = query.state
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      if (stateTargets.length > 0) {
+        const sVal = rec.state.toLowerCase();
+        const rawState = String(rec.rawData.State || '').toLowerCase();
+        const rawSTATE = String(rec.rawData.STATE || '').toLowerCase();
+        const stateMatched = stateTargets.some(
+          (s) => sVal.includes(s) || rawState.includes(s) || rawSTATE.includes(s),
+        );
+        if (!stateMatched) return false;
+      }
     }
 
-    // 3. Year / Period filter
+    // 3. Year / Period filter (supports multiple comma-separated years)
     if (query.year && query.year.trim() && query.year !== 'ALL') {
-      const y = query.year.trim().toLowerCase();
-      const yearMatched =
-        String(rec.rawData.Year || '').toLowerCase().includes(y) ||
-        String(rec.rawData.YEAR || '').toLowerCase().includes(y) ||
-        String(rec.rawData.Login || '').toLowerCase().includes(y) ||
-        String(rec.rawData.Offer_Release_Date || '').toLowerCase().includes(y) ||
-        String(rec.rawData.Date || '').toLowerCase().includes(y) ||
-        String(rec.rawData.DATE || '').toLowerCase().includes(y) ||
-        String(rec.rawData['NEET-PG 2025 SCORE'] || '').toLowerCase().includes(y);
-      if (!yearMatched) return false;
+      const yearTargets = query.year
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      if (yearTargets.length > 0) {
+        const yearMatched = yearTargets.some(
+          (y) =>
+            String(rec.rawData.Year || '').toLowerCase().includes(y) ||
+            String(rec.rawData.YEAR || '').toLowerCase().includes(y) ||
+            String(rec.rawData.Login || '').toLowerCase().includes(y) ||
+            String(rec.rawData.Offer_Release_Date || '').toLowerCase().includes(y) ||
+            String(rec.rawData.Date || '').toLowerCase().includes(y) ||
+            String(rec.rawData.DATE || '').toLowerCase().includes(y) ||
+            String(rec.rawData['NEET-PG 2025 SCORE'] || '').toLowerCase().includes(y),
+        );
+        if (!yearMatched) return false;
+      }
     }
 
-    // 4. Category / Qualification filter
+    // 4. Category / Qualification filter (supports multiple comma-separated categories)
     if (query.category && query.category.trim() && query.category !== 'ALL') {
-      const cat = query.category.trim().toLowerCase();
-      const catMatched =
-        String(rec.rawData.CATEGORY || '').toLowerCase() === cat ||
-        String(rec.rawData.Category || '').toLowerCase() === cat ||
-        String(rec.rawData.QUALIFICATION || '').toLowerCase() === cat;
-      if (!catMatched) return false;
+      const catTargets = query.category
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      if (catTargets.length > 0) {
+        const rawCat = String(rec.rawData.CATEGORY || '').toLowerCase();
+        const rawCategory = String(rec.rawData.Category || '').toLowerCase();
+        const rawQual = String(rec.rawData.QUALIFICATION || '').toLowerCase();
+        const catMatched = catTargets.some(
+          (cat) =>
+            rawCat === cat ||
+            rawCategory === cat ||
+            rawQual === cat ||
+            rawCat.includes(cat) ||
+            rawCategory.includes(cat),
+        );
+        if (!catMatched) return false;
+      }
     }
 
     // 5. CIBIL Score filter
@@ -717,38 +758,56 @@ export class DriveAllocationService {
       if (cibilVal < minCibil) return false;
     }
 
-    // 6. Lender / Partner filter
+    // 6. Lender / Partner filter (supports multiple comma-separated lenders)
     if (query.lender && query.lender.trim() && query.lender !== 'ALL') {
-      const l = query.lender.trim().toLowerCase();
-      const lenderMatched =
-        String(rec.rawData.Lender || '').toLowerCase().includes(l) ||
-        String(rec.rawData.Partner_Name || '').toLowerCase().includes(l) ||
-        String(rec.rawData['Employer/Business Name'] || '').toLowerCase().includes(l);
-      if (!lenderMatched) return false;
+      const lenderTargets = query.lender
+        .split(',')
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+      if (lenderTargets.length > 0) {
+        const lenderMatched = lenderTargets.some(
+          (l) =>
+            String(rec.rawData.Lender || '').toLowerCase().includes(l) ||
+            String(rec.rawData.Partner_Name || '').toLowerCase().includes(l) ||
+            String(rec.rawData['Employer/Business Name'] || '').toLowerCase().includes(l),
+        );
+        if (!lenderMatched) return false;
+      }
     }
 
-    // 7. Custom Column Filter
+    // 7. Custom Column Filter (supports multiple comma-separated values)
     if (query.customColumn && query.customValue && query.customValue.trim()) {
       const col = query.customColumn.trim();
       const isAmountCol = /(amount|eligib|loan|limit|salary|income)/i.test(col);
       // Skip text match if numeric range is being applied
       if (!isAmountCol || (query.minAmount === undefined && query.maxAmount === undefined)) {
-        const val = query.customValue.trim().toLowerCase();
-        const cellVal = String(rec.rawData?.[col] || '').toLowerCase();
-        let matched = cellVal.includes(val);
-        if (!matched) {
+        const valTargets = query.customValue
+          .split(',')
+          .map((v) => v.trim().toLowerCase())
+          .filter(Boolean);
+        if (valTargets.length > 0) {
+          const cellVal = String(rec.rawData?.[col] || '').toLowerCase();
           const colLower = col.toLowerCase();
-          if (colLower.includes('city') || colLower.includes('branch') || colLower.includes('district')) {
-            matched = (rec.branch || '').toLowerCase().includes(val);
-          } else if (colLower.includes('state')) {
-            matched = (rec.state || '').toLowerCase().includes(val);
-          } else if (colLower.includes('name')) {
-            matched = (rec.customerName || '').toLowerCase().includes(val);
-          } else if (colLower.includes('phone') || colLower.includes('mobile')) {
-            matched = (rec.phone || '').toLowerCase().includes(val) || (rec.cleanPhone || '').includes(val);
-          }
+          const matched = valTargets.some((val) => {
+            if (cellVal.includes(val)) return true;
+            if (colLower.includes('city') || colLower.includes('branch') || colLower.includes('district')) {
+              if ((rec.branch || '').toLowerCase().includes(val)) return true;
+            } else if (colLower.includes('state')) {
+              if ((rec.state || '').toLowerCase().includes(val)) return true;
+            } else if (colLower.includes('name')) {
+              if ((rec.customerName || '').toLowerCase().includes(val)) return true;
+            } else if (colLower.includes('phone') || colLower.includes('mobile')) {
+              if (
+                (rec.phone || '').toLowerCase().includes(val) ||
+                (rec.cleanPhone || '').includes(val)
+              ) {
+                return true;
+              }
+            }
+            return false;
+          });
+          if (!matched) return false;
         }
-        if (!matched) return false;
       }
     }
 
@@ -762,6 +821,128 @@ export class DriveAllocationService {
       }
       if (hasMinAmount && recAmount < Number(query.minAmount)) return false;
       if (hasMaxAmount && recAmount > Number(query.maxAmount)) return false;
+    }
+
+    // 8.5 Multi-Column & Multi-Value Dynamic Filters (grouped by column: OR within column, AND across columns)
+    if (query.filters) {
+      let filterList: Array<{
+        column?: string;
+        value?: string;
+        values?: string[];
+        minAmount?: number;
+        maxAmount?: number;
+      }> = [];
+
+      if (typeof query.filters === 'string') {
+        try {
+          filterList = JSON.parse(query.filters);
+        } catch {
+          filterList = [];
+        }
+      } else if (Array.isArray(query.filters)) {
+        filterList = query.filters;
+      }
+
+      // Group conditions by column so multiple selections for any column use OR logic, and multiple columns use AND logic
+      const colGroups = new Map<
+        string,
+        {
+          isAmountCol: boolean;
+          values: string[];
+          minAmount?: number;
+          maxAmount?: number;
+        }
+      >();
+
+      for (const flt of filterList) {
+        if (!flt || !flt.column) continue;
+        const col = flt.column.trim();
+        if (!col) continue;
+        const isAmountCol = /(amount|eligib|loan|limit|salary|income)/i.test(col);
+
+        let group = colGroups.get(col);
+        if (!group) {
+          group = { isAmountCol, values: [] };
+          colGroups.set(col, group);
+        }
+
+        if (isAmountCol) {
+          if (flt.minAmount !== undefined) group.minAmount = flt.minAmount;
+          if (flt.maxAmount !== undefined) group.maxAmount = flt.maxAmount;
+        }
+
+        // Support both flt.values (array of strings) and flt.value (comma-separated string)
+        if (Array.isArray(flt.values)) {
+          for (const v of flt.values) {
+            const str = String(v ?? '').trim().toLowerCase();
+            if (str && !group.values.includes(str)) group.values.push(str);
+          }
+        }
+        if (flt.value && String(flt.value).trim()) {
+          const parts = String(flt.value).split(',');
+          for (const p of parts) {
+            const str = p.trim().toLowerCase();
+            if (str && !group.values.includes(str)) group.values.push(str);
+          }
+        }
+      }
+
+      // Check each column group
+      for (const [col, group] of colGroups.entries()) {
+        // Numeric range check for amount columns
+        if (
+          group.isAmountCol &&
+          (group.minAmount !== undefined || group.maxAmount !== undefined)
+        ) {
+          let recAmount = rec.eligibilityAmount;
+          if (!recAmount && rec.rawData?.[col]) {
+            recAmount =
+              Number(String(rec.rawData[col]).replace(/[^0-9.-]+/g, '')) || 0;
+          }
+          if (group.minAmount !== undefined && recAmount < Number(group.minAmount)) {
+            return false;
+          }
+          if (group.maxAmount !== undefined && recAmount > Number(group.maxAmount)) {
+            return false;
+          }
+        }
+
+        // Multiple values check (OR within column)
+        if (group.values.length > 0) {
+          const cellVal = String(rec.rawData?.[col] ?? '').toLowerCase();
+          const colLower = col.toLowerCase();
+          const branchVal = (rec.branch || '').toLowerCase();
+          const stateVal = (rec.state || '').toLowerCase();
+          const nameVal = (rec.customerName || '').toLowerCase();
+          const phoneVal = (rec.phone || '').toLowerCase();
+          const cleanPhoneVal = (rec.cleanPhone || '');
+
+          const isCityCol =
+            colLower.includes('city') ||
+            colLower.includes('branch') ||
+            colLower.includes('district');
+          const isStateCol = colLower.includes('state');
+          const isNameCol = colLower.includes('name');
+          const isPhoneCol =
+            colLower.includes('phone') || colLower.includes('mobile');
+
+          const colMatched = group.values.some((target) => {
+            if (cellVal.includes(target)) return true;
+            if (isCityCol && branchVal.includes(target)) return true;
+            if (isStateCol && stateVal.includes(target)) return true;
+            if (isNameCol && nameVal.includes(target)) return true;
+            if (
+              isPhoneCol &&
+              (phoneVal.includes(target) || cleanPhoneVal.includes(target))
+            ) {
+              return true;
+            }
+            return false;
+          });
+
+          if (!colMatched) return false;
+        }
+      }
     }
 
     // 9. Global Search
@@ -1092,6 +1273,55 @@ export class DriveAllocationService {
   }
 
   /**
+   * Search unique values for a column directly from the file's records in backend
+   */
+  async searchColumnValues(
+    fileId: string,
+    column: string,
+    search = '',
+    limit = 100,
+  ): Promise<string[]> {
+    if (!column || !column.trim()) return [];
+    const cached = await this.getFileCachedData(fileId);
+    const { allocatedRowIndices, allocatedPhones } =
+      await this.getAllocatedIndices(fileId);
+
+    const valuesSet = new Set<string>();
+    const q = search.trim().toLowerCase();
+    const colTrimmed = column.trim();
+
+    for (const rec of cached.records) {
+      if (allocatedRowIndices.has(rec.rowIndex)) continue;
+      if (rec.cleanPhone && allocatedPhones.has(rec.cleanPhone)) continue;
+
+      let rawVal = rec.rawData?.[colTrimmed];
+      if (rawVal === undefined || rawVal === null || String(rawVal).trim() === '') {
+        const colLower = colTrimmed.toLowerCase();
+        if (colLower.includes('city') || colLower.includes('branch') || colLower.includes('district')) {
+          rawVal = rec.branch;
+        } else if (colLower.includes('state')) {
+          rawVal = rec.state;
+        } else if (colLower.includes('name')) {
+          rawVal = rec.customerName;
+        }
+      }
+
+      if (rawVal !== undefined && rawVal !== null) {
+        const str = String(rawVal).trim();
+        if (str && str !== '--' && str.length <= 80) {
+          if (!q || str.toLowerCase().includes(q)) {
+            valuesSet.add(str);
+            if (valuesSet.size >= limit) break;
+          }
+        }
+      }
+    }
+    return Array.from(valuesSet).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }),
+    );
+  }
+
+  /**
    * Get Available (Unallocated) records for a selected file
    */
   async getAvailableRecords(
@@ -1110,6 +1340,7 @@ export class DriveAllocationService {
       customValue?: string;
       minAmount?: number;
       maxAmount?: number;
+      filters?: any;
     } = {},
   ): Promise<{
     data: any[];
@@ -1389,6 +1620,7 @@ export class DriveAllocationService {
             customValue: dto.customValue,
             minAmount: dto.minAmount,
             maxAmount: dto.maxAmount,
+            filters: dto.filters,
           })
         ) {
           targetRecords.push(rec);

@@ -30,6 +30,7 @@ import { LifecycleEventsModule } from './modules/lifecycle-events/lifecycle-even
 import { StageHistoryModule } from './modules/stage-history/stage-history.module';
 import { AiSummaryModule } from './modules/ai-summary/ai-summary.module';
 import { DriveAllocationModule } from './modules/drive-allocation/drive-allocation.module';
+import { DialerModule } from './modules/dialer/dialer.module';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { DriveAllocationModule } from './modules/drive-allocation/drive-allocati
     StageHistoryModule,
     AiSummaryModule,
     DriveAllocationModule,
+    DialerModule,
   ],
   controllers: [AppController],
   providers: [AppService],
