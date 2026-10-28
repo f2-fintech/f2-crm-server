@@ -132,13 +132,31 @@ export class DialerService {
 
       directReports.forEach(addPersonIdentifiers);
     } else if (role === 'MANAGER') {
-      // All members in Manager's team
-      const teamFilter: any = { isActive: true };
-      if (user.teamId) {
-        teamFilter.teamId = user.teamId;
-      } else {
-        teamFilter.reportsTo = user._id;
+      // All members in Manager's team (TLs & Agents)
+      const teamObjId = user.teamId
+        ? typeof user.teamId === 'string'
+          ? new Types.ObjectId(user.teamId)
+          : user.teamId
+        : null;
+
+      const managerObjId = user._id
+        ? typeof user._id === 'string'
+          ? new Types.ObjectId(user._id)
+          : user._id
+        : null;
+
+      const orConditions: any[] = [];
+      if (teamObjId) {
+        orConditions.push({ teamId: teamObjId }, { teamId: user.teamId });
       }
+      if (managerObjId) {
+        orConditions.push({ reportsTo: managerObjId }, { reportsTo: user._id });
+      }
+
+      const teamFilter: any = {
+        isActive: true,
+        ...(orConditions.length > 0 ? { $or: orConditions } : {}),
+      };
 
       const teamMembers = await this.userModel
         .find(teamFilter)
@@ -172,7 +190,7 @@ export class DialerService {
         from_date: dto.from_date || `${today} 00:00:00`,
         from_date_to: dto.from_date_to || `${today} 23:59:59`,
         phone_number: dto.phone_number || '',
-        limit: dto.limit || 250,
+        limit: dto.limit || 1000,
       };
 
       let response: Response;
@@ -189,6 +207,21 @@ export class DialerService {
           },
           body: JSON.stringify(payload),
         });
+
+        if (!response.ok && primaryUrl !== localUrl) {
+          this.logger.warn(
+            `Primary dialer URL (${primaryUrl}) returned status ${response.status}. Trying local fallback (${localUrl})...`,
+          );
+          response = await fetch(localUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: this.getAuthToken(),
+              'Bypass-Tunnel-Reminder': 'true',
+            },
+            body: JSON.stringify(payload),
+          });
+        }
       } catch (primaryErr: any) {
         if (primaryUrl !== localUrl) {
           this.logger.warn(
