@@ -1,4 +1,7 @@
 import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import { User, UserDocument } from '../users/schemas/user.schema';
 import { GetCallLogsDto } from './dto/get-call-logs.dto';
 
 export interface CallLogItem {
@@ -47,6 +50,10 @@ export interface CallLogItem {
 export class DialerService {
   private readonly logger = new Logger(DialerService.name);
 
+  constructor(
+    @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+  ) {}
+
   private getApiUrl(): string {
     return (
       process.env.DIALER_API_URL ||
@@ -65,7 +72,86 @@ export class DialerService {
     return Number(process.env.DIALER_PROCESS_ID) || 14;
   }
 
-  async getCallLogs(dto: GetCallLogsDto): Promise<{
+  /**
+   * Determine allowed dialer agent identifiers for the logged-in user based on role & team hierarchy
+   */
+  private async getAllowedAgentIdentifiers(
+    user?: any,
+  ): Promise<{ isUnrestricted: boolean; identifiers: Set<string> }> {
+    if (!user) {
+      return { isUnrestricted: true, identifiers: new Set() };
+    }
+
+    const role = (user.role || '').toUpperCase();
+
+    // Super Admin and Admin have unrestricted company-wide access to all logs
+    if (role === 'SUPER_ADMIN' || role === 'ADMIN') {
+      return { isUnrestricted: true, identifiers: new Set() };
+    }
+
+    const identifiers = new Set<string>();
+
+    const addPersonIdentifiers = (person: any) => {
+      if (!person) return;
+      if (person.dialerExtension) {
+        identifiers.add(person.dialerExtension.trim().toLowerCase());
+      }
+      if (person.employeeId) {
+        identifiers.add(person.employeeId.trim().toLowerCase());
+      }
+      const fullName = `${person.firstName || ''} ${person.lastName || ''}`.trim().toLowerCase();
+      if (fullName) {
+        identifiers.add(fullName);
+      }
+      if (person.firstName) {
+        identifiers.add(person.firstName.trim().toLowerCase());
+      }
+      if (person.phone) {
+        identifiers.add(person.phone.trim().toLowerCase());
+      }
+    };
+
+    // Always include current user's own identifiers
+    addPersonIdentifiers(user);
+
+    if (role === 'TEAM_LEADER') {
+      // Direct reports assigned to this Team Leader
+      const tlId = user._id
+        ? typeof user._id === 'string'
+          ? new Types.ObjectId(user._id)
+          : user._id
+        : null;
+
+      const directReports = await this.userModel
+        .find({
+          reportsTo: { $in: [user._id, tlId].filter(Boolean) },
+          isActive: true,
+        })
+        .select('firstName lastName employeeId dialerExtension phone')
+        .lean();
+
+      directReports.forEach(addPersonIdentifiers);
+    } else if (role === 'MANAGER') {
+      // All members in Manager's team
+      const teamFilter: any = { isActive: true };
+      if (user.teamId) {
+        teamFilter.teamId = user.teamId;
+      } else {
+        teamFilter.reportsTo = user._id;
+      }
+
+      const teamMembers = await this.userModel
+        .find(teamFilter)
+        .select('firstName lastName employeeId dialerExtension phone')
+        .lean();
+
+      teamMembers.forEach(addPersonIdentifiers);
+    }
+
+    return { isUnrestricted: false, identifiers };
+  }
+
+  async getCallLogs(dto: GetCallLogsDto, user?: any): Promise<{
     success: boolean;
     total: number;
     data: CallLogItem[];
@@ -130,9 +216,28 @@ export class DialerService {
       }
 
       const json = await response.json();
-      const logs: CallLogItem[] = json?.result?.allCallLog || [];
+      const rawLogs: CallLogItem[] = json?.result?.allCallLog || [];
 
-      // Calculate quick summary metrics
+      // Role-Based Team & Hierarchy Filtering
+      const { isUnrestricted, identifiers } = await this.getAllowedAgentIdentifiers(user);
+
+      const logs = isUnrestricted
+        ? rawLogs
+        : rawLogs.filter((log) => {
+            const emp = (log.employee_code || '').trim().toLowerCase();
+            const agent = (log.agent_name || log.extension_no || '').trim().toLowerCase();
+
+            for (const id of identifiers) {
+              if (!id) continue;
+              // Exact match on extension, employee code or name
+              if (emp === id || agent === id) return true;
+              // Substring match for full name
+              if (emp && (emp.includes(id) || id.includes(emp))) return true;
+            }
+            return false;
+          });
+
+      // Calculate summary metrics for filtered logs
       let answered = 0;
       let unanswered = 0;
       const agents = new Set<string>();
