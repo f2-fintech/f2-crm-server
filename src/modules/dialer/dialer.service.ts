@@ -86,7 +86,7 @@ export class DialerService {
         from_date: dto.from_date || `${today} 00:00:00`,
         from_date_to: dto.from_date_to || `${today} 23:59:59`,
         phone_number: dto.phone_number || '',
-        limit: dto.limit || 100,
+        limit: dto.limit || 250,
       };
 
       let response: Response;
@@ -138,7 +138,13 @@ export class DialerService {
       const agents = new Set<string>();
 
       for (const log of logs) {
-        if (log.agent_name) agents.add(log.agent_name);
+        const agKey = (
+          log.employee_code ||
+          log.agent_name ||
+          log.extension_no ||
+          ''
+        ).trim();
+        if (agKey) agents.add(agKey);
         const durationSec =
           log.call_duration || log.crm_duration || '00:00:00';
         if (durationSec !== '00:00:00' && durationSec !== '0') {
