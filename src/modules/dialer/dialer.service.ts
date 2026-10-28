@@ -77,34 +77,60 @@ export class DialerService {
    */
   private async getAllowedAgentIdentifiers(
     user?: any,
-  ): Promise<{ isUnrestricted: boolean; identifiers: Set<string> }> {
+  ): Promise<{
+    isUnrestricted: boolean;
+    identifiers: Set<string>;
+    teamMembers: {
+      id: string;
+      name: string;
+      role: string;
+      employeeId?: string;
+      dialerExtension?: string;
+    }[];
+  }> {
     if (!user) {
-      return { isUnrestricted: true, identifiers: new Set() };
+      return { isUnrestricted: true, identifiers: new Set(), teamMembers: [] };
     }
 
     const role = (user.role || '').toUpperCase();
 
     // Super Admin and Admin have unrestricted company-wide access to all logs
     if (role === 'SUPER_ADMIN' || role === 'ADMIN') {
-      return { isUnrestricted: true, identifiers: new Set() };
+      return { isUnrestricted: true, identifiers: new Set(), teamMembers: [] };
     }
 
     const identifiers = new Set<string>();
+    const teamMembersMap = new Map<string, any>();
 
     const addPersonIdentifiers = (person: any) => {
       if (!person) return;
+      const id = String(person._id || person.employeeId || person.firstName);
+      const fullName = `${person.firstName || ''} ${person.lastName || ''}`.trim();
+
+      if (!teamMembersMap.has(id)) {
+        teamMembersMap.set(id, {
+          id,
+          name: fullName || person.firstName || 'Unknown',
+          role: person.role || 'EMPLOYEE',
+          employeeId: person.employeeId,
+          dialerExtension: person.dialerExtension,
+        });
+      }
+
       if (person.dialerExtension) {
         identifiers.add(person.dialerExtension.trim().toLowerCase());
       }
       if (person.employeeId) {
         identifiers.add(person.employeeId.trim().toLowerCase());
       }
-      const fullName = `${person.firstName || ''} ${person.lastName || ''}`.trim().toLowerCase();
       if (fullName) {
-        identifiers.add(fullName);
+        identifiers.add(fullName.toLowerCase());
       }
       if (person.firstName) {
         identifiers.add(person.firstName.trim().toLowerCase());
+      }
+      if (person.lastName) {
+        identifiers.add(person.lastName.trim().toLowerCase());
       }
       if (person.phone) {
         identifiers.add(person.phone.trim().toLowerCase());
@@ -127,12 +153,12 @@ export class DialerService {
           reportsTo: { $in: [user._id, tlId].filter(Boolean) },
           isActive: true,
         })
-        .select('firstName lastName employeeId dialerExtension phone')
+        .select('_id firstName lastName employeeId dialerExtension phone role')
         .lean();
 
       directReports.forEach(addPersonIdentifiers);
     } else if (role === 'MANAGER') {
-      // All members in Manager's team (TLs & Agents)
+      // 1. All direct team members and Team Leaders under Manager
       const teamObjId = user.teamId
         ? typeof user.teamId === 'string'
           ? new Types.ObjectId(user.teamId)
@@ -153,26 +179,49 @@ export class DialerService {
         orConditions.push({ reportsTo: managerObjId }, { reportsTo: user._id });
       }
 
-      const teamFilter: any = {
-        isActive: true,
-        ...(orConditions.length > 0 ? { $or: orConditions } : {}),
-      };
-
-      const teamMembers = await this.userModel
-        .find(teamFilter)
-        .select('firstName lastName employeeId dialerExtension phone')
+      const directMembers = await this.userModel
+        .find({
+          isActive: true,
+          ...(orConditions.length > 0 ? { $or: orConditions } : {}),
+        })
+        .select('_id firstName lastName employeeId dialerExtension phone role')
         .lean();
 
-      teamMembers.forEach(addPersonIdentifiers);
+      directMembers.forEach(addPersonIdentifiers);
+
+      // 2. Also include all agents/telecallers who report to any Team Leader under this Manager
+      const directIds = directMembers.map((m) => m._id);
+      if (directIds.length > 0) {
+        const subMembers = await this.userModel
+          .find({
+            isActive: true,
+            reportsTo: { $in: directIds },
+          })
+          .select('_id firstName lastName employeeId dialerExtension phone role')
+          .lean();
+
+        subMembers.forEach(addPersonIdentifiers);
+      }
     }
 
-    return { isUnrestricted: false, identifiers };
+    return {
+      isUnrestricted: false,
+      identifiers,
+      teamMembers: Array.from(teamMembersMap.values()),
+    };
   }
 
   async getCallLogs(dto: GetCallLogsDto, user?: any): Promise<{
     success: boolean;
     total: number;
     data: CallLogItem[];
+    teamMembers?: {
+      id: string;
+      name: string;
+      role: string;
+      employeeId?: string;
+      dialerExtension?: string;
+    }[];
     stats: {
       totalCalls: number;
       answeredCalls: number;
@@ -252,13 +301,20 @@ export class DialerService {
       const rawLogs: CallLogItem[] = json?.result?.allCallLog || [];
 
       // Role-Based Team & Hierarchy Filtering
-      const { isUnrestricted, identifiers } = await this.getAllowedAgentIdentifiers(user);
+      const { isUnrestricted, identifiers, teamMembers } =
+        await this.getAllowedAgentIdentifiers(user);
 
       const logs = isUnrestricted
         ? rawLogs
         : rawLogs.filter((log) => {
             const emp = (log.employee_code || '').trim().toLowerCase();
-            const agent = (log.agent_name || log.extension_no || '').trim().toLowerCase();
+            const agent = (
+              log.agent_name ||
+              log.extension_no ||
+              ''
+            )
+              .trim()
+              .toLowerCase();
 
             for (const id of identifiers) {
               if (!id) continue;
@@ -266,6 +322,7 @@ export class DialerService {
               if (emp === id || agent === id) return true;
               // Substring match for full name
               if (emp && (emp.includes(id) || id.includes(emp))) return true;
+              if (agent && (agent.includes(id) || id.includes(agent))) return true;
             }
             return false;
           });
@@ -296,6 +353,7 @@ export class DialerService {
         success: true,
         total: logs.length,
         data: logs,
+        teamMembers,
         stats: {
           totalCalls: logs.length,
           answeredCalls: answered,
