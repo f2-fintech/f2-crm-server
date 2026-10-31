@@ -77,3 +77,56 @@ export class AllocateRecordsDto {
   @IsOptional()
   filters?: any;
 }
+
+export class PreviewRecordsDto {
+  @IsString()
+  @IsNotEmpty()
+  sourceFileId: string;
+
+  @IsNumber()
+  @IsOptional()
+  count?: number;
+
+  @IsString()
+  @IsOptional()
+  city?: string;
+
+  @IsString()
+  @IsOptional()
+  state?: string;
+
+  @IsString()
+  @IsOptional()
+  year?: string;
+
+  @IsString()
+  @IsOptional()
+  category?: string;
+
+  @IsNumber()
+  @IsOptional()
+  minAmount?: number;
+
+  @IsNumber()
+  @IsOptional()
+  maxAmount?: number;
+
+  @IsNumber()
+  @IsOptional()
+  cibilMin?: number;
+
+  @IsString()
+  @IsOptional()
+  lender?: string;
+
+  @IsString()
+  @IsOptional()
+  customColumn?: string;
+
+  @IsString()
+  @IsOptional()
+  customValue?: string;
+
+  @IsOptional()
+  filters?: any;
+}

@@ -8,12 +8,27 @@ import {
   Delete,
   UseGuards,
   Req,
+  Query,
 } from '@nestjs/common';
 import { NotionPagesService } from './notion-pages.service';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
 import { IsOptional, IsString } from 'class-validator';
 import { UpdateNotionPageDto } from './dto/update-notion-page.dto';
+
+export class UpdateRowFieldDto {
+  @IsOptional()
+  rowIndex?: number;
+
+  @IsOptional()
+  @IsString()
+  rowId?: string;
+
+  @IsString()
+  field: string;
+
+  value: any;
+}
 
 export class AcceptInviteDto {
   @IsString()
@@ -74,8 +89,30 @@ export class NotionPagesController {
   }
 
   @Get('admin/remarks')
-  getAllRemarks(@Req() req: Request) {
-    return this.pagesService.getAllRemarks(req.user);
+  getAllRemarks(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('search') search?: string,
+    @Query('team') team?: string,
+    @Query('sentiment') sentiment?: string,
+    @Req() req?: Request,
+  ) {
+    return this.pagesService.getAllRemarks(req?.user, {
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      search,
+      team,
+      sentiment,
+    });
+  }
+
+  @Patch(':id/row-field')
+  updateRowField(
+    @Param('id') id: string,
+    @Body() body: UpdateRowFieldDto,
+    @Req() req: Request,
+  ) {
+    return this.pagesService.updateRowField(id, body, req.user);
   }
 
   @Get(':id/activity-log')
