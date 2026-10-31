@@ -30,7 +30,7 @@ import {
   DriveAllocationLogDocument,
   AllocationActionType,
 } from './schemas/drive-allocation-log.schema';
-import { AllocateRecordsDto } from './dto/allocate-records.dto';
+import { AllocateRecordsDto, PreviewRecordsDto } from './dto/allocate-records.dto';
 import { ReassignRecordsDto, ReturnRecordsDto } from './dto/drive-actions.dto';
 
 export interface CachedRecord {
@@ -1546,6 +1546,241 @@ export class DriveAllocationService {
    * - Populates employee's Notion Sheet
    * - Synchronized with Leads CRM table
    */
+  /**
+   * Selects records using a fair, stratified balanced distribution across states.
+   * If fewer rows match than requested count (or count <= 0), returns all matching.
+   * Rows within each state are shuffled/randomized so there is no fixed order bias.
+   */
+  public selectBalancedRecordsByState(
+    matchingRecords: CachedRecord[],
+    count?: number,
+  ): {
+    selectedRecords: CachedRecord[];
+    stateCounts: Record<string, number>;
+  } {
+    const totalMatching = matchingRecords.length;
+
+    // Helper: Fisher-Yates shuffle
+    const shuffle = <T>(array: T[]): T[] => {
+      const arr = [...array];
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    };
+
+    // If count is 0 or undefined, take all matching rows
+    const targetCount =
+      count !== undefined && count !== null && count > 0
+        ? Math.min(count, totalMatching)
+        : totalMatching;
+
+    // Helper to extract clean state name from record
+    const getRecordState = (rec: CachedRecord): string => {
+      const rawState =
+        rec.state ||
+        rec.rawData?.State ||
+        rec.rawData?.STATE ||
+        rec.rawData?.state ||
+        '';
+      const clean = String(rawState).trim().toUpperCase();
+      if (
+        !clean ||
+        /^\d+$/.test(clean) ||
+        clean === 'N/A' ||
+        clean === 'NA' ||
+        clean === 'NULL' ||
+        clean === 'NONE' ||
+        clean === '-'
+      ) {
+        return 'OTHER';
+      }
+      return clean;
+    };
+
+    // Group matching records by state
+    const stateGroups = new Map<string, CachedRecord[]>();
+    for (const rec of matchingRecords) {
+      const st = getRecordState(rec);
+      if (!stateGroups.has(st)) {
+        stateGroups.set(st, []);
+      }
+      stateGroups.get(st)!.push(rec);
+    }
+
+    // Shuffle records inside each state group to randomize selection
+    for (const [st, recs] of stateGroups.entries()) {
+      stateGroups.set(st, shuffle(recs));
+    }
+
+    // If targetCount >= totalMatching, take all records (interleaved across states)
+    if (targetCount >= totalMatching) {
+      const stateCounts: Record<string, number> = {};
+      for (const [st, recs] of stateGroups.entries()) {
+        stateCounts[st] = recs.length;
+      }
+      const interleaved: CachedRecord[] = [];
+      const stateArrays = Array.from(stateGroups.values());
+      const maxLen = Math.max(...stateArrays.map((a) => a.length), 0);
+      for (let i = 0; i < maxLen; i++) {
+        for (const arr of stateArrays) {
+          if (i < arr.length) {
+            interleaved.push(arr[i]);
+          }
+        }
+      }
+      return {
+        selectedRecords: interleaved,
+        stateCounts,
+      };
+    }
+
+    // Stratified Equal Distribution / Fair Quota across states
+    const states = Array.from(stateGroups.keys());
+    const selectedByState = new Map<string, CachedRecord[]>();
+    states.forEach((s) => selectedByState.set(s, []));
+
+    let remainingNeeded = targetCount;
+    const activeStates = new Set(states);
+
+    while (remainingNeeded > 0 && activeStates.size > 0) {
+      const perState = Math.max(1, Math.floor(remainingNeeded / activeStates.size));
+      let allocatedThisRound = 0;
+
+      for (const state of Array.from(activeStates)) {
+        if (remainingNeeded <= 0) break;
+
+        const pool = stateGroups.get(state)!;
+        const currentSelected = selectedByState.get(state)!.length;
+        const availableInPool = pool.length - currentSelected;
+
+        if (availableInPool <= 0) {
+          activeStates.delete(state);
+          continue;
+        }
+
+        const take = Math.min(perState, availableInPool, remainingNeeded);
+        const startIndex = currentSelected;
+        const items = pool.slice(startIndex, startIndex + take);
+        selectedByState.get(state)!.push(...items);
+
+        remainingNeeded -= take;
+        allocatedThisRound += take;
+
+        if (selectedByState.get(state)!.length >= pool.length) {
+          activeStates.delete(state);
+        }
+      }
+
+      // If remainder cannot be divided evenly with floor, give 1 each to remaining active states
+      if (allocatedThisRound === 0 && remainingNeeded > 0) {
+        for (const state of Array.from(activeStates)) {
+          if (remainingNeeded <= 0) break;
+          const pool = stateGroups.get(state)!;
+          const currentSelected = selectedByState.get(state)!.length;
+          if (currentSelected < pool.length) {
+            selectedByState.get(state)!.push(pool[currentSelected]);
+            remainingNeeded -= 1;
+            allocatedThisRound += 1;
+            if (selectedByState.get(state)!.length >= pool.length) {
+              activeStates.delete(state);
+            }
+          }
+        }
+        if (allocatedThisRound === 0) break;
+      }
+    }
+
+    // Interleave the selected records so states are nicely mixed in the output
+    const interleavedSelected: CachedRecord[] = [];
+    const selectedArrays = Array.from(selectedByState.values());
+    const maxAllocated = Math.max(...selectedArrays.map((a) => a.length), 0);
+
+    for (let i = 0; i < maxAllocated; i++) {
+      for (const arr of selectedArrays) {
+        if (i < arr.length) {
+          interleavedSelected.push(arr[i]);
+        }
+      }
+    }
+
+    const stateCounts: Record<string, number> = {};
+    for (const [st, recs] of selectedByState.entries()) {
+      if (recs.length > 0) {
+        stateCounts[st] = recs.length;
+      }
+    }
+
+    return {
+      selectedRecords: interleavedSelected.slice(0, targetCount),
+      stateCounts,
+    };
+  }
+
+  /**
+   * Preview records to be allocated with balanced state distribution
+   */
+  async previewRecords(dto: PreviewRecordsDto): Promise<{
+    totalMatching: number;
+    selectedCount: number;
+    stateCounts: Record<string, number>;
+    records: CachedRecord[];
+    recordIds: string[];
+    headers: string[];
+  }> {
+    const { sourceFileId, count } = dto;
+    const cached = await this.getFileCachedData(sourceFileId);
+
+    const { allocatedRowIndices, allocatedPhones } =
+      await this.getAllocatedIndices(sourceFileId);
+
+    const seenPhoneSet = new Set<string>();
+    const matchingAvailableRecords: CachedRecord[] = [];
+
+    for (const rec of cached.records) {
+      if (allocatedRowIndices.has(rec.rowIndex)) continue;
+      if (rec.cleanPhone && allocatedPhones.has(rec.cleanPhone)) continue;
+
+      if (rec.cleanPhone && rec.cleanPhone.length >= 8) {
+        if (seenPhoneSet.has(rec.cleanPhone)) continue;
+        seenPhoneSet.add(rec.cleanPhone);
+      }
+
+      if (
+        this.matchesQuery(rec, {
+          city: dto.city,
+          state: dto.state,
+          year: dto.year,
+          category: dto.category,
+          cibilMin: dto.cibilMin,
+          lender: dto.lender,
+          customColumn: dto.customColumn,
+          customValue: dto.customValue,
+          minAmount: dto.minAmount,
+          maxAmount: dto.maxAmount,
+          filters: dto.filters,
+        })
+      ) {
+        matchingAvailableRecords.push(rec);
+      }
+    }
+
+    const { selectedRecords, stateCounts } = this.selectBalancedRecordsByState(
+      matchingAvailableRecords,
+      count,
+    );
+
+    return {
+      totalMatching: matchingAvailableRecords.length,
+      selectedCount: selectedRecords.length,
+      stateCounts,
+      records: selectedRecords,
+      recordIds: selectedRecords.map((r) => r._id),
+      headers: cached.headers || [],
+    };
+  }
+
   async allocateRecords(
     dto: AllocateRecordsDto,
     currentUser?: any,
@@ -1599,6 +1834,8 @@ export class DriveAllocationService {
       );
     } else if (count && count > 0) {
       const seenPhoneSet = new Set<string>();
+      const matchingAvailableRecords: CachedRecord[] = [];
+
       for (const rec of cached.records) {
         if (allocatedRowIndices.has(rec.rowIndex)) continue;
         if (rec.cleanPhone && allocatedPhones.has(rec.cleanPhone)) continue;
@@ -1623,10 +1860,15 @@ export class DriveAllocationService {
             filters: dto.filters,
           })
         ) {
-          targetRecords.push(rec);
-          if (targetRecords.length >= count) break;
+          matchingAvailableRecords.push(rec);
         }
       }
+
+      const { selectedRecords } = this.selectBalancedRecordsByState(
+        matchingAvailableRecords,
+        count,
+      );
+      targetRecords = selectedRecords;
     } else {
       throw new BadRequestException(
         'Please specify either recordIds or count to allocate',

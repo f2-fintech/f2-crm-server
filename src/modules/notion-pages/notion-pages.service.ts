@@ -695,6 +695,7 @@ export class NotionPagesService implements OnModuleInit {
       }
     }
 
+    this.invalidateRemarksCache();
     return updatedPage;
   }
 
@@ -880,6 +881,7 @@ export class NotionPagesService implements OnModuleInit {
       },
       { new: true },
     );
+    this.invalidateRemarksCache();
     return updatedPage;
   }
 
@@ -916,132 +918,212 @@ export class NotionPagesService implements OnModuleInit {
     return clone.save();
   }
 
-  async getAllRemarks(user: any) {
+  async updateRowField(
+    id: string,
+    body: { rowIndex?: number; rowId?: string; field: string; value: any },
+    user: any,
+  ) {
+    if (!id || !body.field) {
+      throw new BadRequestException('Invalid page ID or field');
+    }
+
+    const page = await this.pageModel.findById(id).lean();
+    if (!page) throw new NotFoundException('Page not found');
+
+    const hasAccess = await this.checkAccess(page, user);
+    if (!hasAccess) {
+      throw new ForbiddenException('You do not have access to update this page');
+    }
+
+    if (body.rowId) {
+      await this.pageModel.updateOne(
+        { _id: id, 'rows.id': body.rowId },
+        { $set: { [`rows.$.${body.field}`]: body.value } },
+      );
+    } else if (typeof body.rowIndex === 'number' && body.rowIndex >= 0) {
+      await this.pageModel.updateOne(
+        { _id: id },
+        { $set: { [`rows.${body.rowIndex}.${body.field}`]: body.value } },
+      );
+    } else {
+      throw new BadRequestException('Either rowId or valid rowIndex must be provided');
+    }
+
+    this.invalidateRemarksCache();
+    return { success: true, field: body.field, value: body.value };
+  }
+
+  async getAllRemarks(
+    user: any,
+    options?: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      team?: string;
+      sentiment?: string;
+    },
+  ) {
     const role = user.role?.toUpperCase();
     if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
       throw new ForbiddenException('Only admins can view unified remarks');
     }
 
     const now = Date.now();
+    let result: any[];
     if (this.remarksCache && now - this.remarksCache.timestamp < this.REMARKS_CACHE_TTL) {
-      return this.remarksCache.data;
+      result = this.remarksCache.data;
+    } else {
+      const pages = await this.pageModel
+        .find({ isDeleted: false, pageType: 'SHEET' })
+        .select('title columns rows createdAt teamId assignedMemberId')
+        .populate('teamId', 'name')
+        .populate('assignedMemberId', 'firstName lastName')
+        .lean();
+
+      result = pages
+        .map((page: any) => {
+          const teamObj: any = page.teamId;
+          const memberObj: any = page.assignedMemberId;
+          const teamName = teamObj?.name || 'Unassigned';
+          const assignedTo = memberObj
+            ? `${memberObj.firstName || ''} ${memberObj.lastName || ''}`.trim() || 'Unassigned'
+            : 'Unassigned';
+
+          // Build a column key → column name map (col_0 → "Name", col_1 → "Mobile", etc.)
+          const colMap: Record<string, string> = {};
+          if (Array.isArray(page.columns)) {
+            page.columns.forEach((col: any) => {
+              if (col.key && col.name) {
+                colMap[col.key] = col.name;
+              }
+            });
+          }
+
+          // Identify which columns contain remarks/feedback
+          const remarkKeys = Object.entries(colMap)
+            .filter(([, name]) => {
+              const n = name.toLowerCase();
+              return (
+                n.includes('remark') ||
+                n.includes('feedback') ||
+                n.includes('comment') ||
+                n.includes('note')
+              );
+            })
+            .map(([key]) => key);
+
+          // Also check sample rows (first 5) for raw keys like 'disposition', 'remarks', etc.
+          const sampleRows = (page.rows || []).slice(0, 5);
+          sampleRows.forEach((row: any) => {
+            Object.keys(row).forEach((k) => {
+              if (k !== 'id') {
+                const kl = k.toLowerCase();
+                if (
+                  kl.includes('remark') ||
+                  kl.includes('feedback') ||
+                  kl.includes('comment') ||
+                  kl.includes('note')
+                ) {
+                  if (!remarkKeys.includes(k)) remarkKeys.push(k);
+                }
+              }
+            });
+          });
+
+          let remarksFilled = 0;
+          let remarksEmpty = 0;
+          const rowsWithRemarksRaw: any[] = [];
+
+          // Single pass over rows
+          (page.rows || []).forEach((row: any) => {
+            const hasRemarkText = remarkKeys.some(
+              (k) => row[k] && String(row[k]).trim() !== '',
+            );
+            const hasDisposition =
+              row.disposition && String(row.disposition).trim() !== '';
+
+            if (hasRemarkText || hasDisposition) {
+              remarksFilled++;
+              rowsWithRemarksRaw.push(row);
+            } else {
+              remarksEmpty++;
+            }
+          });
+
+          // Map ONLY the rows that have remarks to human-readable objects
+          // Limit to latest 50 remarks per sheet to keep JSON payload lean and fast
+          const mappedRows = rowsWithRemarksRaw.slice(-50).map((row: any) => {
+            const readable: Record<string, any> = { _rowId: row.id };
+            Object.entries(row).forEach(([key, value]) => {
+              if (key === 'id') return;
+              if (key === 'disposition') {
+                readable.disposition = value;
+                return;
+              }
+              if (key === 'feedback_notes') {
+                readable.feedback_notes = value;
+                return;
+              }
+              const humanKey = colMap[key] || key;
+              readable[humanKey] = value;
+            });
+            return readable;
+          });
+
+          return {
+            _id: page._id,
+            title: page.title,
+            teamName,
+            assignedTo,
+            createdAt: page.createdAt,
+            columns: page.columns || [],
+            columnNames: Object.values(colMap),
+            remarkColumnNames: remarkKeys.map((k) => colMap[k] || k),
+            totalRows: (page.rows || []).length,
+            remarksFilled,
+            remarksEmpty,
+            rows: mappedRows,
+          };
+        })
+        .filter((p) => p.totalRows > 0);
+
+      this.remarksCache = { data: result, timestamp: Date.now() };
     }
 
-    const pages = await this.pageModel
-      .find({ isDeleted: false, pageType: 'SHEET' })
-      .select('title columns rows createdAt teamId assignedMemberId')
-      .populate('teamId', 'name')
-      .populate('assignedMemberId', 'firstName lastName')
-      .lean();
+    // If options with page or limit are provided, return structured pagination
+    if (options && (options.page !== undefined || options.limit !== undefined)) {
+      let filtered = [...result];
+      if (options.team && options.team !== 'All') {
+        filtered = filtered.filter((p) => p.teamName === options.team);
+      }
+      if (options.search) {
+        const s = options.search.toLowerCase();
+        filtered = filtered.filter(
+          (p) =>
+            p.title.toLowerCase().includes(s) ||
+            p.teamName.toLowerCase().includes(s) ||
+            p.assignedTo.toLowerCase().includes(s),
+        );
+      }
+      const page = Math.max(1, options.page || 1);
+      const limit = Math.max(1, options.limit || 15);
+      const total = filtered.length;
+      const totalPages = Math.ceil(total / limit) || 1;
+      const paginatedPages = filtered.slice((page - 1) * limit, page * limit);
 
-    const result = pages
-      .map((page: any) => {
-        const teamObj: any = page.teamId;
-        const memberObj: any = page.assignedMemberId;
-        const teamName = teamObj?.name || 'Unassigned';
-        const assignedTo = memberObj
-          ? `${memberObj.firstName || ''} ${memberObj.lastName || ''}`.trim() || 'Unassigned'
-          : 'Unassigned';
+      return {
+        data: paginatedPages,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages,
+          hasNextPage: page < totalPages,
+          hasPrevPage: page > 1,
+        },
+      };
+    }
 
-        // Build a column key → column name map (col_0 → "Name", col_1 → "Mobile", etc.)
-        const colMap: Record<string, string> = {};
-        if (Array.isArray(page.columns)) {
-          page.columns.forEach((col: any) => {
-            if (col.key && col.name) {
-              colMap[col.key] = col.name;
-            }
-          });
-        }
-
-        // Identify which columns contain remarks/feedback
-        const remarkKeys = Object.entries(colMap)
-          .filter(([, name]) => {
-            const n = name.toLowerCase();
-            return (
-              n.includes('remark') ||
-              n.includes('feedback') ||
-              n.includes('comment') ||
-              n.includes('note')
-            );
-          })
-          .map(([key]) => key);
-
-        // Also check sample rows (first 5) for raw keys like 'disposition', 'remarks', etc.
-        const sampleRows = (page.rows || []).slice(0, 5);
-        sampleRows.forEach((row: any) => {
-          Object.keys(row).forEach((k) => {
-            if (k !== 'id') {
-              const kl = k.toLowerCase();
-              if (
-                kl.includes('remark') ||
-                kl.includes('feedback') ||
-                kl.includes('comment') ||
-                kl.includes('note')
-              ) {
-                if (!remarkKeys.includes(k)) remarkKeys.push(k);
-              }
-            }
-          });
-        });
-
-        let remarksFilled = 0;
-        let remarksEmpty = 0;
-        const rowsWithRemarksRaw: any[] = [];
-
-        // Single pass over rows
-        (page.rows || []).forEach((row: any) => {
-          const hasRemarkText = remarkKeys.some(
-            (k) => row[k] && String(row[k]).trim() !== '',
-          );
-          const hasDisposition =
-            row.disposition && String(row.disposition).trim() !== '';
-
-          if (hasRemarkText || hasDisposition) {
-            remarksFilled++;
-            rowsWithRemarksRaw.push(row);
-          } else {
-            remarksEmpty++;
-          }
-        });
-
-        // Map ONLY the rows that have remarks to human-readable objects
-        // Limit to latest 50 remarks per sheet to keep JSON payload lean and fast
-        const mappedRows = rowsWithRemarksRaw.slice(-50).map((row: any) => {
-          const readable: Record<string, any> = { _rowId: row.id };
-          Object.entries(row).forEach(([key, value]) => {
-            if (key === 'id') return;
-            if (key === 'disposition') {
-              readable.disposition = value;
-              return;
-            }
-            if (key === 'feedback_notes') {
-              readable.feedback_notes = value;
-              return;
-            }
-            const humanKey = colMap[key] || key;
-            readable[humanKey] = value;
-          });
-          return readable;
-        });
-
-        return {
-          _id: page._id,
-          title: page.title,
-          teamName,
-          assignedTo,
-          createdAt: page.createdAt,
-          columns: page.columns || [],
-          columnNames: Object.values(colMap),
-          remarkColumnNames: remarkKeys.map((k) => colMap[k] || k),
-          totalRows: (page.rows || []).length,
-          remarksFilled,
-          remarksEmpty,
-          rows: mappedRows,
-        };
-      })
-      .filter((p) => p.totalRows > 0);
-
-    this.remarksCache = { data: result, timestamp: Date.now() };
     return result;
   }
 

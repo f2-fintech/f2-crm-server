@@ -11,7 +11,7 @@ import {
 import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { DriveAllocationService } from './drive-allocation.service';
-import { AllocateRecordsDto } from './dto/allocate-records.dto';
+import { AllocateRecordsDto, PreviewRecordsDto } from './dto/allocate-records.dto';
 import {
   ReassignRecordsDto,
   ReturnRecordsDto,
@@ -145,6 +145,15 @@ export class DriveAllocationController {
       page,
       limit,
     });
+  }
+
+  @Roles('SUPER_ADMIN', 'ADMIN', 'MANAGER')
+  @ApiOperation({
+    summary: 'Preview records to be allocated with balanced state distribution',
+  })
+  @Post('preview')
+  async previewRecords(@Body() dto: PreviewRecordsDto) {
+    return await this.driveAllocationService.previewRecords(dto);
   }
 
   @Roles('SUPER_ADMIN', 'ADMIN')
