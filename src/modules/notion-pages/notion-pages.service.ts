@@ -153,6 +153,20 @@ export class NotionPagesService implements OnModuleInit {
     return saved;
   }
 
+  private toSafeObjectId(id: any): Types.ObjectId | null {
+    if (!id) return null;
+    if (id instanceof Types.ObjectId) return id;
+    const str = id.toString();
+    if (Types.ObjectId.isValid(str)) {
+      return new Types.ObjectId(str);
+    }
+    return null;
+  }
+
+  private normalizeRole(roleStr?: string): string {
+    return (roleStr || '').toUpperCase().replace(/[\s-]+/g, '_');
+  }
+
   private async getRootAssignedMemberId(page: any): Promise<string | null> {
     let current = page;
     while (current && !current.assignedMemberId && current.parentPageId) {
@@ -164,62 +178,92 @@ export class NotionPagesService implements OnModuleInit {
   }
 
   private async checkAccess(page: any, user: any) {
-    const role = user.role?.toUpperCase();
-    if (['SUPER_ADMIN', 'ADMIN'].includes(role)) return true;
+    const rawRole = this.normalizeRole(user?.role);
+    if (['SUPER_ADMIN', 'ADMIN'].includes(rawRole)) return true;
+
+    const userObjId = this.toSafeObjectId(user?._id);
+    const userStr = user?._id ? user._id.toString() : '';
+    const userTeamIdStr = user?.teamId ? user.teamId.toString() : '';
 
     const assignedToId = await this.getRootAssignedMemberId(page);
 
     if (assignedToId) {
-      if (assignedToId === user._id.toString()) return true;
+      if (assignedToId === userStr) return true;
 
       const assignedUser = await this.userModel.findById(assignedToId).lean();
       if (!assignedUser) return false;
 
-      if (
-        role === 'MANAGER' &&
-        assignedUser.teamId?.toString() === user.teamId?.toString()
-      ) {
+      const assignedUserTeamStr = assignedUser.teamId ? assignedUser.teamId.toString() : '';
+
+      // Direct report check (for TLs/Managers)
+      if (assignedUser.reportsTo?.toString() === userStr) {
         return true;
       }
 
-      if (
-        role === 'TEAM_LEADER' &&
-        assignedUser.reportsTo?.toString() === user._id.toString()
-      ) {
-        return true;
+      // Manager check: either in same team, or manager manages assignedUser's team
+      if (rawRole === 'MANAGER') {
+        if (userTeamIdStr && assignedUserTeamStr === userTeamIdStr) return true;
+        if (assignedUserTeamStr) {
+          const managesTeam = await this.teamModel.exists({
+            _id: this.toSafeObjectId(assignedUserTeamStr),
+            isActive: { $ne: false },
+            $or: [{ managerId: userObjId }, { members: userObjId }],
+          });
+          if (managesTeam) return true;
+        }
+      }
+
+      // Team Leader check: either in same team, or TL is member of assignedUser's team
+      if (['TEAM_LEADER', 'TL', 'LEADER'].includes(rawRole)) {
+        if (userTeamIdStr && assignedUserTeamStr === userTeamIdStr) return true;
+        if (assignedUserTeamStr) {
+          const inSameTeam = await this.teamModel.exists({
+            _id: this.toSafeObjectId(assignedUserTeamStr),
+            isActive: { $ne: false },
+            members: userObjId,
+          });
+          if (inSameTeam) return true;
+        }
       }
 
       return false;
     }
 
     if (page.teamId) {
+      const pageTeamIdStr = page.teamId.toString();
+      if (userTeamIdStr && pageTeamIdStr === userTeamIdStr) return true;
+
       const pageTeam = await this.teamModel.findById(page.teamId).lean();
       if (pageTeam) {
-        if (pageTeam.managerId?.toString() === user._id.toString()) return true;
-        if (
-          pageTeam.members?.some(
-            (m: any) => m.toString() === user._id.toString(),
-          )
-        )
-          return true;
+        if (pageTeam.managerId?.toString() === userStr) return true;
+        if (pageTeam.members?.some((m: any) => m.toString() === userStr)) return true;
       }
-      if (page.teamId.toString() === user.teamId?.toString()) return true;
-      if (page.createdBy?.toString() === user._id.toString()) return true;
+      if (page.createdBy?.toString() === userStr) return true;
       return false;
     }
 
-    if (page.createdBy?.toString() === user._id.toString()) return true;
+    if (page.createdBy?.toString() === userStr) return true;
     return false;
   }
 
   async getTree(user: any) {
+    const rawRole = this.normalizeRole(user?.role);
+    const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(rawRole);
+    const isManager = rawRole === 'MANAGER';
+    const isTeamLeader = ['TEAM_LEADER', 'TL', 'LEADER'].includes(rawRole);
+
+    const userObjId = this.toSafeObjectId(user?._id);
+    const userStr = user?._id ? user._id.toString() : '';
+    const userTeamObjId = this.toSafeObjectId(user?.teamId);
+    const userTeamStr = user?.teamId ? user.teamId.toString() : '';
+
     const pages = await this.pageModel
       .find({ isDeleted: false, parentPageId: null })
       .select('-rows -content')
       .lean();
 
-    const pagesByAssignedMember = new Map();
-    const genericPagesByTeam = new Map();
+    const pagesByAssignedMember = new Map<string, any[]>();
+    const genericPagesByTeam = new Map<string, any[]>();
 
     pages.forEach((p) => {
       if (!p.parentPageId) {
@@ -227,134 +271,132 @@ export class NotionPagesService implements OnModuleInit {
           const uid = p.assignedMemberId.toString();
           if (!pagesByAssignedMember.has(uid))
             pagesByAssignedMember.set(uid, []);
-          pagesByAssignedMember.get(uid).push(p);
+          pagesByAssignedMember.get(uid)!.push(p);
         } else if (p.teamId) {
           const tid = p.teamId.toString();
           if (!genericPagesByTeam.has(tid)) genericPagesByTeam.set(tid, []);
-          genericPagesByTeam.get(tid).push(p);
+          genericPagesByTeam.get(tid)!.push(p);
         }
       }
     });
 
-    let allowedTeamIds: string[] = [];
-    let allowedUserIds: string[] = [];
-    const role = user.role?.toUpperCase();
-
-    if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
-      const activeTeams = await this.teamModel.find({ isActive: true }).lean();
-      const allUsers = await this.userModel.find({ isActive: true }).lean();
-      allowedTeamIds = activeTeams.map((t) => t._id.toString());
-      allowedUserIds = allUsers.map((u) => u._id.toString());
-    } else if (role === 'MANAGER') {
-      const managedTeams = await this.teamModel
-        .find({
-          isActive: true,
-          $or: [{ managerId: user._id }, { members: user._id }],
-        })
-        .lean();
-      const managedTeamIds = managedTeams.map((t) => t._id.toString());
-
-      if (user.teamId && !managedTeamIds.includes(user.teamId.toString())) {
-        managedTeamIds.push(user.teamId.toString());
-      }
-      allowedTeamIds = managedTeamIds;
-
-      if (allowedTeamIds.length > 0) {
-        const teamUsers = await this.userModel
-          .find({ teamId: { $in: allowedTeamIds }, isActive: true })
-          .lean();
-        allowedUserIds = [
-          ...new Set([
-            ...teamUsers.map((u) => u._id.toString()),
-            user._id.toString(),
-          ]),
-        ];
-      } else {
-        allowedUserIds = [user._id.toString()];
-      }
-    } else if (role === 'TEAM_LEADER') {
-      const leaderTeams = await this.teamModel
-        .find({
-          isActive: true,
-          members: user._id,
-        })
-        .lean();
-      const leaderTeamIds = leaderTeams.map((t) => t._id.toString());
-
-      if (user.teamId && !leaderTeamIds.includes(user.teamId.toString())) {
-        leaderTeamIds.push(user.teamId.toString());
-      }
-      allowedTeamIds = leaderTeamIds;
-
-      const reports = await this.userModel
-        .find({ reportsTo: user._id, isActive: true })
-        .lean();
-      allowedUserIds = [
-        user._id.toString(),
-        ...reports.map((r) => r._id.toString()),
-      ];
-    } else {
-      const memberTeams = await this.teamModel
-        .find({
-          isActive: true,
-          members: user._id,
-        })
-        .lean();
-      const memberTeamIds = memberTeams.map((t) => t._id.toString());
-
-      if (user.teamId && !memberTeamIds.includes(user.teamId.toString())) {
-        memberTeamIds.push(user.teamId.toString());
-      }
-      allowedTeamIds = memberTeamIds;
-
-      allowedUserIds = [user._id.toString()];
-    }
-
     let activeTeams: any[] = [];
     let allUsers: any[] = [];
 
-    if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
-      activeTeams = await this.teamModel.find({ isActive: true }).lean();
-      allUsers = await this.userModel.find({ isActive: true }).lean();
+    if (isAdmin) {
+      activeTeams = await this.teamModel.find({ isActive: { $ne: false } }).lean();
+      allUsers = await this.userModel.find({ isActive: { $ne: false } }).lean();
     } else {
-      if (allowedTeamIds.length > 0) {
+      const userIdentities = [userObjId, userStr].filter(Boolean);
+      const teamIdentities = [userTeamObjId, userTeamStr].filter(Boolean);
+
+      const teamQueryConds: any[] = [];
+      if (userIdentities.length > 0) {
+        teamQueryConds.push({ members: { $in: userIdentities } });
+        if (isManager) {
+          teamQueryConds.push({ managerId: { $in: userIdentities } });
+        }
+      }
+      if (teamIdentities.length > 0) {
+        teamQueryConds.push({ _id: { $in: teamIdentities } });
+      }
+
+      if (teamQueryConds.length === 0) {
+        activeTeams = [];
+      } else {
         activeTeams = await this.teamModel
-          .find({ isActive: true, _id: { $in: allowedTeamIds } })
+          .find({
+            isActive: { $ne: false },
+            $or: teamQueryConds,
+          })
           .lean();
       }
-      if (allowedUserIds.length > 0) {
+
+      const activeTeamObjIds = activeTeams
+        .map((t) => this.toSafeObjectId(t._id))
+        .filter(Boolean);
+
+      if (isManager) {
+        const memberIds = activeTeams.flatMap((t) =>
+          (t.members || []).map((m: any) => this.toSafeObjectId(m)),
+        ).filter(Boolean);
+
         allUsers = await this.userModel
-          .find({ isActive: true, _id: { $in: allowedUserIds } })
+          .find({
+            isActive: { $ne: false },
+            $or: [
+              ...(activeTeamObjIds.length > 0 ? [{ teamId: { $in: activeTeamObjIds } }] : []),
+              ...(userObjId ? [{ _id: userObjId }] : []),
+              ...(memberIds.length > 0 ? [{ _id: { $in: memberIds } }] : []),
+            ],
+          })
           .lean();
+      } else if (isTeamLeader) {
+        const memberIds = activeTeams.flatMap((t) =>
+          (t.members || []).map((m: any) => this.toSafeObjectId(m)),
+        ).filter(Boolean);
+
+        allUsers = await this.userModel
+          .find({
+            isActive: { $ne: false },
+            $or: [
+              ...(userObjId ? [{ reportsTo: userObjId }] : []),
+              ...(activeTeamObjIds.length > 0 ? [{ teamId: { $in: activeTeamObjIds } }] : []),
+              ...(userObjId ? [{ _id: userObjId }] : []),
+              ...(memberIds.length > 0 ? [{ _id: { $in: memberIds } }] : []),
+            ],
+          })
+          .lean();
+      } else {
+        allUsers = userObjId
+          ? await this.userModel
+              .find({
+                isActive: { $ne: false },
+                _id: userObjId,
+              })
+              .lean()
+          : [];
       }
     }
 
+    const userMap = new Map<string, any>();
+    allUsers.forEach((u) => userMap.set(u._id.toString(), u));
+    allUsers = Array.from(userMap.values());
+
     const teamFolders = activeTeams.map((team) => {
       const teamIdStr = team._id.toString();
-      const teamMembers = allUsers.filter(
-        (u) => u.teamId?.toString() === teamIdStr,
-      );
+      const teamMemberStrIds = (team.members || []).map((m: any) => m.toString());
+
+      const teamMembers = allUsers.filter((u) => {
+        const uId = u._id.toString();
+        const matchesTeamId = u.teamId?.toString() === teamIdStr;
+        const matchesMembers = teamMemberStrIds.includes(uId);
+        return matchesTeamId || matchesMembers;
+      });
 
       const memberNodes = teamMembers.map((u) => {
         const userIdStr = u._id.toString();
+        const roleLabel =
+          u.role === 'MANAGER'
+            ? 'Manager'
+            : ['TEAM_LEADER', 'TL', 'LEADER'].includes(this.normalizeRole(u.role))
+            ? 'TL'
+            : 'Member';
+
         return {
           _id: `user_${userIdStr}`,
           id: `user_${userIdStr}`,
-          title: `${u.firstName} ${u.lastName} (${u.role === 'MANAGER' ? 'Manager' : 'Member'})`,
+          title: `${u.firstName} ${u.lastName} (${roleLabel})`,
           pageType: 'PAGE',
           section: 'SHARED',
           children: pagesByAssignedMember.get(userIdStr) || [],
         };
       });
 
-      const genericPages = [
-        'SUPER_ADMIN',
-        'ADMIN',
-        'MANAGER',
-        'TEAM_LEADER',
-      ].includes(role)
-        ? genericPagesByTeam.get(teamIdStr) || []
-        : [];
+      const genericPages =
+        isAdmin || isManager || isTeamLeader
+          ? genericPagesByTeam.get(teamIdStr) || []
+          : [];
 
       return {
         _id: teamIdStr,
@@ -371,78 +413,82 @@ export class NotionPagesService implements OnModuleInit {
       private: pages.filter(
         (p) =>
           p.section === 'PRIVATE' &&
-          p.createdBy?.toString() === user._id.toString(),
+          p.createdBy?.toString() === userStr,
       ),
       workspace: pages.filter(
         (p) =>
           p.section === 'WORKSPACE' &&
-          (['SUPER_ADMIN', 'ADMIN'].includes(role) ||
-            p.createdBy?.toString() === user._id.toString()),
+          (isAdmin || p.createdBy?.toString() === userStr),
       ),
     };
   }
 
   private async buildTeamRootNode(team: any, user: any, role: string) {
+    const rawRole = this.normalizeRole(role);
+    const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(rawRole);
+    const isManager = rawRole === 'MANAGER';
+    const isTeamLeader = ['TEAM_LEADER', 'TL', 'LEADER'].includes(rawRole);
+
     const teamIdStr = team._id.toString();
+    const teamObjId = this.toSafeObjectId(team._id);
+    const userObjId = this.toSafeObjectId(user?._id);
+
     const teamPages = await this.pageModel
-      .find({ teamId: team._id, isDeleted: false, parentPageId: null })
+      .find({ teamId: (teamObjId || team._id) as any, isDeleted: false, parentPageId: null })
       .select('-rows -content')
       .lean();
 
-    let allowedUserIds: string[] = [];
-    if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
-      const allUsers = await this.userModel.find({ isActive: true }).lean();
-      allowedUserIds = allUsers.map((u) => u._id.toString());
-    } else if (role === 'MANAGER') {
-      const managedTeams = await this.teamModel
+    let teamUsers: any[] = [];
+    if (isAdmin || isManager) {
+      teamUsers = await this.userModel
         .find({
-          isActive: true,
-          $or: [{ managerId: user._id }, { members: user._id }],
+          isActive: { $ne: false },
+          $or: [
+            ...(teamObjId ? [{ teamId: teamObjId }] : []),
+            ...((team.members || []).map((m: any) => ({ _id: this.toSafeObjectId(m) }))),
+          ],
         })
         .lean();
-      const managedTeamIds = managedTeams.map((t) => t._id.toString());
-      if (user.teamId && !managedTeamIds.includes(user.teamId.toString())) {
-        managedTeamIds.push(user.teamId.toString());
-      }
-      if (managedTeamIds.length > 0) {
-        const teamUsers = await this.userModel
-          .find({ teamId: { $in: managedTeamIds }, isActive: true })
-          .lean();
-        allowedUserIds = [
-          ...new Set([
-            ...teamUsers.map((u) => u._id.toString()),
-            user._id.toString(),
-          ]),
-        ];
-      } else {
-        allowedUserIds = [user._id.toString()];
-      }
-    } else if (role === 'TEAM_LEADER') {
-      const reports = await this.userModel
-        .find({ reportsTo: user._id, isActive: true })
+    } else if (isTeamLeader) {
+      teamUsers = await this.userModel
+        .find({
+          isActive: { $ne: false },
+          $or: [
+            ...(userObjId ? [{ reportsTo: userObjId }] : []),
+            ...(teamObjId ? [{ teamId: teamObjId }] : []),
+            ...(userObjId ? [{ _id: userObjId }] : []),
+            ...((team.members || []).map((m: any) => ({ _id: this.toSafeObjectId(m) }))),
+          ],
+        })
         .lean();
-      allowedUserIds = [
-        user._id.toString(),
-        ...reports.map((r) => r._id.toString()),
-      ];
     } else {
-      allowedUserIds = [user._id.toString()];
+      teamUsers = userObjId
+        ? await this.userModel
+            .find({
+              isActive: { $ne: false },
+              _id: userObjId,
+            })
+            .lean()
+        : [];
     }
 
-    const teamMembers = await this.userModel
-      .find({
-        teamId: team._id,
-        isActive: true,
-        _id: { $in: allowedUserIds },
-      })
-      .lean();
+    const userMap = new Map<string, any>();
+    teamUsers.forEach((u) => userMap.set(u._id.toString(), u));
+    teamUsers = Array.from(userMap.values());
 
-    const memberNodes = teamMembers.map((u) => {
+    const memberNodes = teamUsers.map((u) => {
       const userIdStr = u._id.toString();
+      const roleLabel =
+        u.role === 'MANAGER'
+          ? 'Manager'
+          : ['TEAM_LEADER', 'TL', 'LEADER'].includes(this.normalizeRole(u.role))
+          ? 'TL'
+          : 'Member';
+
       return {
         _id: `user_${userIdStr}`,
         id: `user_${userIdStr}`,
-        title: `${u.firstName} ${u.lastName} (${u.role === 'MANAGER' ? 'Manager' : 'Member'})`,
+        title: `${u.firstName} ${u.lastName} (${roleLabel})`,
         pageType: 'PAGE',
         section: 'SHARED',
         children: teamPages.filter(
@@ -451,14 +497,10 @@ export class NotionPagesService implements OnModuleInit {
       };
     });
 
-    const genericPages = [
-      'SUPER_ADMIN',
-      'ADMIN',
-      'MANAGER',
-      'TEAM_LEADER',
-    ].includes(role)
-      ? teamPages.filter((p) => !p.assignedMemberId)
-      : [];
+    const genericPages =
+      isAdmin || isManager || isTeamLeader
+        ? teamPages.filter((p) => !p.assignedMemberId)
+        : [];
 
     return {
       _id: teamIdStr,
@@ -473,27 +515,42 @@ export class NotionPagesService implements OnModuleInit {
   }
 
   async getPageById(id: string, user: any) {
-    const role = user.role?.toUpperCase();
+    const rawRole = this.normalizeRole(user?.role);
+    const userStr = user?._id ? user._id.toString() : '';
 
     if (id.startsWith('user_')) {
       const userId = id.replace('user_', '');
 
-      if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
-        if (userId !== user._id.toString()) {
-          if (role === 'MANAGER') {
-            const targetUser = await this.userModel.findById(userId).lean();
-            if (
-              !targetUser ||
-              targetUser.teamId?.toString() !== user.teamId?.toString()
-            ) {
+      if (!['SUPER_ADMIN', 'ADMIN'].includes(rawRole)) {
+        if (userId !== userStr) {
+          const targetUser = await this.userModel.findById(userId).lean();
+          if (!targetUser) {
+            throw new NotFoundException('User not found');
+          }
+
+          if (rawRole === 'MANAGER') {
+            const hasAccess =
+              targetUser.teamId?.toString() === user?.teamId?.toString() ||
+              (await this.teamModel.exists({
+                _id: this.toSafeObjectId(targetUser.teamId),
+                isActive: { $ne: false },
+                $or: [{ managerId: this.toSafeObjectId(userStr) }, { members: this.toSafeObjectId(userStr) }],
+              }));
+
+            if (!hasAccess) {
               throw new ForbiddenException('Not allowed to view this folder');
             }
-          } else if (role === 'TEAM_LEADER') {
-            const targetUser = await this.userModel.findById(userId).lean();
-            if (
-              !targetUser ||
-              targetUser.reportsTo?.toString() !== user._id.toString()
-            ) {
+          } else if (['TEAM_LEADER', 'TL', 'LEADER'].includes(rawRole)) {
+            const hasAccess =
+              targetUser.reportsTo?.toString() === userStr ||
+              targetUser.teamId?.toString() === user?.teamId?.toString() ||
+              (await this.teamModel.exists({
+                _id: this.toSafeObjectId(targetUser.teamId),
+                isActive: { $ne: false },
+                members: this.toSafeObjectId(userStr),
+              }));
+
+            if (!hasAccess) {
               throw new ForbiddenException('Not allowed to view this folder');
             }
           } else {
@@ -507,7 +564,7 @@ export class NotionPagesService implements OnModuleInit {
 
       const userPages = await this.pageModel
         .find({
-          assignedMemberId: userId as any,
+          assignedMemberId: this.toSafeObjectId(userId) as any,
           parentPageId: null,
           isDeleted: false,
         })
@@ -517,7 +574,7 @@ export class NotionPagesService implements OnModuleInit {
       return {
         _id: id,
         id: id,
-        title: `${targetUser.firstName} ${targetUser.lastName}-`,
+        title: `${targetUser.firstName} ${targetUser.lastName}`,
         pageType: 'PAGE',
         section: 'SHARED',
         rows: [],
@@ -529,13 +586,11 @@ export class NotionPagesService implements OnModuleInit {
     if (Types.ObjectId.isValid(id)) {
       const team = await this.teamModel.findById(id).lean();
       if (team) {
-        if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
+        if (!['SUPER_ADMIN', 'ADMIN'].includes(rawRole)) {
           const isMyTeam =
-            user.teamId?.toString() === id ||
-            team.managerId?.toString() === user._id.toString() ||
-            team.members?.some(
-              (m: any) => m.toString() === user._id.toString(),
-            );
+            user?.teamId?.toString() === id ||
+            team.managerId?.toString() === userStr ||
+            team.members?.some((m: any) => m.toString() === userStr);
 
           if (!isMyTeam) {
             throw new ForbiddenException(
@@ -543,7 +598,7 @@ export class NotionPagesService implements OnModuleInit {
             );
           }
         }
-        return this.buildTeamRootNode(team, user, role);
+        return this.buildTeamRootNode(team, user, user?.role);
       }
     }
 
@@ -560,7 +615,7 @@ export class NotionPagesService implements OnModuleInit {
       throw new ForbiddenException('You do not have access to this page');
 
     const children = await this.pageModel
-      .find({ parentPageId: id as any, isDeleted: false })
+      .find({ parentPageId: this.toSafeObjectId(id) as any, isDeleted: false })
       .select('-rows -content')
       .lean();
     return { ...page, children };
