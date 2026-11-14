@@ -1166,15 +1166,20 @@ export class NotionPagesService implements OnModuleInit {
     if (cached && now - cached.timestamp < this.REMARKS_CACHE_TTL) {
       result = cached.data;
     } else {
+      // ---- PERFORMANCE FIX: Fetch pages WITHOUT rows first (rows can be huge) ----
+      // We use aggregation to process rows on the DB side, never loading full rows into Node.js RAM
+      const REMARK_KEYWORDS = ['remark', 'feedback', 'comment', 'note', 'disposition'];
+
       const pages = await this.pageModel
         .find(pageFilter)
-        .select('title columns rows createdAt teamId assignedMemberId')
+        .select('title columns createdAt teamId assignedMemberId')
         .populate('teamId', 'name')
         .populate('assignedMemberId', 'firstName lastName')
         .lean();
 
-      result = (pages || [])
-        .map((page: any) => {
+      // Build result with per-page row stats using a lightweight aggregation
+      result = await Promise.all(
+        (pages || []).map(async (page: any) => {
           if (!page) return null;
           const teamObj: any = page.teamId;
           const memberObj: any = page.assignedMemberId;
@@ -1183,87 +1188,90 @@ export class NotionPagesService implements OnModuleInit {
             ? `${memberObj.firstName || ''} ${memberObj.lastName || ''}`.trim() || 'Unassigned'
             : 'Unassigned';
 
-          // Build a column key → column name map (col_0 → "Name", col_1 → "Mobile", etc.)
+          // Build column key → name map
           const colMap: Record<string, string> = {};
           if (Array.isArray(page.columns)) {
             page.columns.forEach((col: any) => {
-              if (col && col.key) {
-                colMap[col.key] = col.name || col.key;
-              }
+              if (col && col.key) colMap[col.key] = col.name || col.key;
             });
           }
 
-          // Identify which columns contain remarks/feedback
+          // Identify remark column keys from column definitions
           const remarkKeys = Object.entries(colMap)
             .filter(([, name]) => {
               const n = String(name || '').toLowerCase();
-              return (
-                n.includes('remark') ||
-                n.includes('feedback') ||
-                n.includes('comment') ||
-                n.includes('note')
-              );
+              return REMARK_KEYWORDS.some((kw) => n.includes(kw));
             })
             .map(([key]) => key);
 
-          // Also check sample rows (first 5) for raw keys like 'disposition', 'remarks', etc.
-          const sampleRows = Array.isArray(page.rows) ? page.rows.slice(0, 5) : [];
-          sampleRows.forEach((row: any) => {
-            if (row && typeof row === 'object') {
-              Object.keys(row).forEach((k) => {
-                if (k !== 'id') {
-                  const kl = k.toLowerCase();
-                  if (
-                    kl.includes('remark') ||
-                    kl.includes('feedback') ||
-                    kl.includes('comment') ||
-                    kl.includes('note')
-                  ) {
-                    if (!remarkKeys.includes(k)) remarkKeys.push(k);
-                  }
-                }
-              });
+          // Also add raw keys that look like remarks (from column names themselves)
+          Object.keys(colMap).forEach((k) => {
+            const kl = k.toLowerCase();
+            if (REMARK_KEYWORDS.some((kw) => kl.includes(kw)) && !remarkKeys.includes(k)) {
+              remarkKeys.push(k);
             }
           });
+          // Always include disposition
+          if (!remarkKeys.includes('disposition')) remarkKeys.push('disposition');
 
-          let remarksFilled = 0;
-          let remarksEmpty = 0;
-          const rowsWithRemarksRaw: any[] = [];
+          // Aggregation: count totalRows, remarksFilled, remarksEmpty for this page
+          // Fetch only rows that have at least one remark field set (limit 50)
+          const pageObjId = this.toSafeObjectId(page._id);
+          const agg = await this.pageModel.aggregate([
+            { $match: { _id: pageObjId } },
+            { $project: { rows: 1 } },
+            { $unwind: { path: '$rows', preserveNullAndEmptyArrays: false } },
+            {
+              $addFields: {
+                hasRemark: {
+                  $or: remarkKeys.map((k) => ({
+                    $and: [
+                      { $ne: [`$rows.${k}`, null] },
+                      { $ne: [`$rows.${k}`, ''] },
+                      { $ne: [`$rows.${k}`, undefined] },
+                    ],
+                  })),
+                },
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalRows: { $sum: 1 },
+                remarksFilled: { $sum: { $cond: ['$hasRemark', 1, 0] } },
+                remarksEmpty: { $sum: { $cond: ['$hasRemark', 0, 1] } },
+                // Collect only rows with remarks, limit 50
+                remarkRows: {
+                  $push: {
+                    $cond: [
+                      '$hasRemark',
+                      '$rows',
+                      '$$REMOVE',
+                    ],
+                  },
+                },
+              },
+            },
+            {
+              $project: {
+                totalRows: 1,
+                remarksFilled: 1,
+                remarksEmpty: 1,
+                remarkRows: { $slice: ['$remarkRows', -50] },
+              },
+            },
+          ]).exec().catch(() => []);
 
-          // Single pass over rows
-          const safeRows = Array.isArray(page.rows) ? page.rows : [];
-          safeRows.forEach((row: any) => {
-            if (!row || typeof row !== 'object') return;
-            const hasRemarkText = remarkKeys.some(
-              (k) => row[k] && String(row[k]).trim() !== '',
-            );
-            const hasDisposition =
-              row.disposition && String(row.disposition).trim() !== '';
+          const stats = agg[0] || { totalRows: 0, remarksFilled: 0, remarksEmpty: 0, remarkRows: [] };
 
-            if (hasRemarkText || hasDisposition) {
-              remarksFilled++;
-              rowsWithRemarksRaw.push(row);
-            } else {
-              remarksEmpty++;
-            }
-          });
-
-          // Map ONLY the rows that have remarks to human-readable objects
-          // Limit to latest 50 remarks per sheet to keep JSON payload lean and fast
-          const mappedRows = rowsWithRemarksRaw.slice(-50).map((row: any) => {
+          // Map remark rows to human-readable objects
+          const mappedRows = (stats.remarkRows || []).map((row: any) => {
             const readable: Record<string, any> = { _rowId: String(row.id || '') };
             Object.entries(row).forEach(([key, value]) => {
               if (key === 'id') return;
-              if (key === 'disposition') {
-                readable.disposition = value;
-                return;
-              }
-              if (key === 'feedback_notes') {
-                readable.feedback_notes = value;
-                return;
-              }
-              const humanKey = colMap[key] || key;
-              readable[humanKey] = value;
+              if (key === 'disposition') { readable.disposition = value; return; }
+              if (key === 'feedback_notes') { readable.feedback_notes = value; return; }
+              readable[colMap[key] || key] = value;
             });
             return readable;
           });
@@ -1277,13 +1285,13 @@ export class NotionPagesService implements OnModuleInit {
             columns: Array.isArray(page.columns) ? page.columns : [],
             columnNames: Object.values(colMap),
             remarkColumnNames: remarkKeys.map((k) => colMap[k] || k),
-            totalRows: safeRows.length,
-            remarksFilled,
-            remarksEmpty,
+            totalRows: stats.totalRows,
+            remarksFilled: stats.remarksFilled,
+            remarksEmpty: stats.remarksEmpty,
             rows: mappedRows,
           };
-        })
-        .filter(Boolean) as any[];
+        }),
+      ).then((arr) => arr.filter(Boolean) as any[]);
 
       this.remarksCacheMap.set(cacheKey, { data: result, timestamp: Date.now() });
     }
@@ -1329,42 +1337,78 @@ export class NotionPagesService implements OnModuleInit {
     const role = user.role?.toUpperCase() || 'EMPLOYEE';
     const userId = user._id ? user._id.toString() : user.id?.toString();
 
-    // Helper to calculate remarks filled vs empty for a sheet
-    const analyzeSheet = (page: any) => {
-      const remarkKeys: string[] = [];
-      if (Array.isArray(page.columns)) {
-        page.columns.forEach((col: any) => {
-          const n = (col.name || '').toLowerCase();
-          if (
-            n.includes('remark') ||
-            n.includes('feedback') ||
-            n.includes('comment') ||
-            n.includes('note') ||
-            n.includes('status') ||
-            n.includes('disposition')
-          ) {
-            remarkKeys.push(col.key);
-          }
-        });
-      }
-      let filled = 0;
-      let empty = 0;
-      const rows = page.rows || [];
-      rows.forEach((row: any) => {
-        const hasRemarkCol = remarkKeys.some(
-          (k) => row[k] && String(row[k]).trim() !== '',
-        );
-        const hasFeedbackNotes =
-          row.feedback_notes && String(row.feedback_notes).trim() !== '';
-        const hasDisposition =
-          row.disposition && String(row.disposition).trim() !== '';
-        if (hasRemarkCol || hasFeedbackNotes || hasDisposition) {
-          filled++;
-        } else {
-          empty++;
-        }
+    // --- PERFORMANCE: Use aggregation to count rows on DB side, never load rows into Node.js RAM ---
+    const REMARK_COLS = ['remark', 'feedback', 'comment', 'note', 'status', 'disposition', 'feedback_notes'];
+
+    // For a set of sheet ObjectIds, return { sheetId -> { total, filled, empty } } via aggregation
+    const aggregateSheetStats = async (sheetIds: any[]): Promise<Record<string, { total: number; filled: number; empty: number }>> => {
+      if (!sheetIds.length) return {};
+      const safeIds = sheetIds.map((id) => this.toSafeObjectId(id)).filter(Boolean);
+      if (!safeIds.length) return {};
+
+      // Build $or for hasRemark: check if any field whose key contains a remark keyword has a truthy value
+      // We use $objectToArray so we don't need to know column keys upfront
+      const agg = await this.pageModel.aggregate([
+        { $match: { _id: { $in: safeIds } } },
+        { $project: { rows: 1 } },
+        { $unwind: { path: '$rows', preserveNullAndEmptyArrays: false } },
+        {
+          $addFields: {
+            rowPairs: { $objectToArray: '$rows' },
+          },
+        },
+        {
+          $addFields: {
+            hasRemark: {
+              $gt: [
+                {
+                  $size: {
+                    $filter: {
+                      input: '$rowPairs',
+                      as: 'pair',
+                      cond: {
+                        $and: [
+                          {
+                            $gt: [
+                              {
+                                $size: {
+                                  $filter: {
+                                    input: REMARK_COLS,
+                                    as: 'kw',
+                                    cond: { $ne: [{ $indexOfCP: ['$$pair.k', '$$kw'] }, -1] },
+                                  },
+                                },
+                              },
+                              0,
+                            ],
+                          },
+                          { $ne: ['$$pair.v', ''] },
+                          { $ne: ['$$pair.v', null] },
+                        ],
+                      },
+                    },
+                  },
+                },
+                0,
+              ],
+            },
+          },
+        },
+        {
+          $group: {
+            _id: '$_id',
+            total: { $sum: 1 },
+            filled: { $sum: { $cond: ['$hasRemark', 1, 0] } },
+            empty: { $sum: { $cond: ['$hasRemark', 0, 1] } },
+          },
+        },
+      ]).exec().catch(() => []);
+
+      const map: Record<string, { total: number; filled: number; empty: number }> = {};
+      (agg || []).forEach((r: any) => {
+        if (r._id) map[r._id.toString()] = { total: r.total || 0, filled: r.filled || 0, empty: r.empty || 0 };
       });
-      return { total: rows.length, filled, empty };
+      return map;
     };
 
     if (['SUPER_ADMIN', 'ADMIN'].includes(role)) {
@@ -1374,9 +1418,10 @@ export class NotionPagesService implements OnModuleInit {
           .find({ isActive: true, role: { $nin: ['SUPER_ADMIN', 'ADMIN'] } })
           .select('firstName lastName email role teamId')
           .lean(),
+        // NO rows field — only metadata
         this.pageModel
           .find({ isDeleted: false, pageType: 'SHEET' })
-          .select('title teamId assignedMemberId columns rows createdAt')
+          .select('title teamId assignedMemberId columns createdAt')
           .lean(),
       ]);
 
@@ -1418,8 +1463,13 @@ export class NotionPagesService implements OnModuleInit {
       let grandTotalFilled = 0;
       let grandTotalEmpty = 0;
 
+      // Aggregate stats for all sheets in one DB call (no rows in RAM)
+      const sheetIds = allSheets.map((s) => s._id);
+      const statsMap = await aggregateSheetStats(sheetIds);
+
       allSheets.forEach((sheet) => {
-        const { total, filled, empty } = analyzeSheet(sheet);
+        const sid = sheet._id.toString();
+        const { total, filled, empty } = statsMap[sid] || { total: 0, filled: 0, empty: 0 };
         grandTotalSheets++;
         grandTotalLeads += total;
         grandTotalFilled += filled;
@@ -1523,7 +1573,7 @@ export class NotionPagesService implements OnModuleInit {
 
       const sheets = await this.pageModel
         .find(queryCond)
-        .select('title teamId assignedMemberId columns rows createdAt')
+        .select('title teamId assignedMemberId columns createdAt')
         .lean();
 
       let teamSheets = 0;
@@ -1544,8 +1594,13 @@ export class NotionPagesService implements OnModuleInit {
         };
       });
 
+      // Aggregate stats for manager/TL sheets in one DB call
+      const sheetIds2 = sheets.map((s) => s._id);
+      const statsMap2 = await aggregateSheetStats(sheetIds2);
+
       sheets.forEach((sheet) => {
-        const { total, filled, empty } = analyzeSheet(sheet);
+        const sid = sheet._id.toString();
+        const { total, filled, empty } = statsMap2[sid] || { total: 0, filled: 0, empty: 0 };
         teamSheets++;
         totalLeads += total;
         remarksFilled += filled;
@@ -1594,15 +1649,19 @@ export class NotionPagesService implements OnModuleInit {
           { sharedWith: user._id },
         ],
       })
-      .select('title columns rows createdAt')
+      .select('title columns createdAt')
       .lean();
 
     let totalLeads = 0;
     let remarksFilled = 0;
     let remarksEmpty = 0;
 
+    // Aggregate stats for employee's sheets
+    const mySheetIds = mySheets.map((s) => s._id);
+    const myStatsMap = await aggregateSheetStats(mySheetIds);
+
     const sheetList = mySheets.map((sheet: any) => {
-      const { total, filled, empty } = analyzeSheet(sheet);
+      const { total, filled, empty } = myStatsMap[sheet._id.toString()] || { total: 0, filled: 0, empty: 0 };
       totalLeads += total;
       remarksFilled += filled;
       remarksEmpty += empty;
