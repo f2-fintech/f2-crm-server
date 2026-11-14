@@ -247,242 +247,263 @@ export class NotionPagesService implements OnModuleInit {
   }
 
   async getTree(user: any) {
-    const rawRole = this.normalizeRole(user?.role);
-    const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(rawRole);
-    const isManager = rawRole === 'MANAGER';
-    const isTeamLeader = ['TEAM_LEADER', 'TL', 'LEADER'].includes(rawRole);
+    try {
+      const rawRole = this.normalizeRole(user?.role);
+      const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(rawRole);
+      const isManager = rawRole === 'MANAGER';
+      const isTeamLeader = ['TEAM_LEADER', 'TL', 'LEADER'].includes(rawRole);
 
-    const userObjId = this.toSafeObjectId(user?._id);
-    const userStr = user?._id ? user._id.toString() : '';
-    const userTeamObjId = this.toSafeObjectId(user?.teamId);
-    const userTeamStr = user?.teamId ? user.teamId.toString() : '';
+      const userObjId = this.toSafeObjectId(user?._id);
+      const userStr = user?._id ? user._id.toString() : '';
+      const userTeamObjId = this.toSafeObjectId(user?.teamId);
+      const userTeamStr = user?.teamId ? user.teamId.toString() : '';
 
-    // 1. Fetch ALL non-deleted pages (safe query: no invalid cast on parentPageId)
-    const allPages = await this.pageModel
-      .find({
-        isDeleted: { $ne: true },
-      })
-      .select('-rows -content')
-      .lean();
+      // 1. Fetch ALL non-deleted pages (safe query: no invalid cast on parentPageId)
+      const allPages = await this.pageModel
+        .find({
+          isDeleted: { $ne: true },
+        })
+        .select('-rows -content')
+        .lean();
 
-    // 2. Build parent -> children map and identify root pages
-    const allPageIds = new Set(allPages.map((p) => p._id.toString()));
-    const childrenByParent = new Map<string, any[]>();
-    const rootPages: any[] = [];
+      // 2. Build parent -> children map and identify root pages
+      const allPageIds = new Set(allPages.map((p) => p._id.toString()));
+      const childrenByParent = new Map<string, any[]>();
+      const rootPages: any[] = [];
 
-    allPages.forEach((p) => {
-      const parentId = p.parentPageId ? p.parentPageId.toString() : null;
-      if (parentId && allPageIds.has(parentId)) {
-        if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
-        childrenByParent.get(parentId)!.push(p);
-      } else {
-        // Root page or orphaned page whose parent was deleted
-        rootPages.push(p);
-      }
-    });
-
-    const attachChildren = (page: any): any => {
-      const pId = page._id?.toString();
-      const children = (childrenByParent.get(pId) || []).map(attachChildren);
-      return {
-        ...page,
-        id: page._id?.toString(),
-        children,
-      };
-    };
-
-    const hydratedRootPages = rootPages.map(attachChildren);
-
-    // 3. Map pages by assignedMemberId and by teamId
-    const pagesByAssignedMember = new Map<string, any[]>();
-    const genericPagesByTeam = new Map<string, any[]>();
-    const standalonePages: any[] = [];
-
-    hydratedRootPages.forEach((p) => {
-      if (p.section === 'PRIVATE' || p.section === 'WORKSPACE') return;
-
-      if (p.assignedMemberId) {
-        const uid = p.assignedMemberId.toString();
-        if (!pagesByAssignedMember.has(uid)) pagesByAssignedMember.set(uid, []);
-        pagesByAssignedMember.get(uid)!.push(p);
-      } else if (p.teamId) {
-        const tid = p.teamId.toString();
-        if (!genericPagesByTeam.has(tid)) genericPagesByTeam.set(tid, []);
-        genericPagesByTeam.get(tid)!.push(p);
-      } else {
-        standalonePages.push(p);
-      }
-    });
-
-    // 4. Fetch Teams and Users
-    let activeTeams: any[] = [];
-    let allUsers: any[] = [];
-
-    if (isAdmin) {
-      activeTeams = await this.teamModel.find({ isActive: { $ne: false } }).lean();
-      allUsers = await this.userModel.find({ isActive: { $ne: false } }).lean();
-    } else {
-      const teamQueryConds: any[] = [];
-      if (userObjId) {
-        teamQueryConds.push({ members: userObjId });
-        teamQueryConds.push({ members: userStr });
-        if (isManager) {
-          teamQueryConds.push({ managerId: userObjId });
-          teamQueryConds.push({ managerId: userStr });
+      allPages.forEach((p) => {
+        const parentId = p.parentPageId ? p.parentPageId.toString() : null;
+        if (parentId && allPageIds.has(parentId)) {
+          if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+          childrenByParent.get(parentId)!.push(p);
+        } else {
+          // Root page or orphaned page whose parent was deleted
+          rootPages.push(p);
         }
-      }
-      if (userTeamObjId) {
-        teamQueryConds.push({ _id: userTeamObjId });
-      }
-      if (userTeamStr) {
-        try {
-          teamQueryConds.push({ _id: new Types.ObjectId(userTeamStr) });
-        } catch (_) {}
-      }
-
-      if (teamQueryConds.length > 0) {
-        activeTeams = await this.teamModel
-          .find({ isActive: { $ne: false }, $or: teamQueryConds })
-          .lean();
-      }
-
-      const activeTeamObjIds = activeTeams.map((t) => this.toSafeObjectId(t._id)).filter(Boolean);
-      const memberIdsFromTeams = activeTeams.flatMap((t) =>
-        (t.members || []).map((m: any) => this.toSafeObjectId(m)),
-      ).filter(Boolean);
-
-      if (isManager) {
-        allUsers = await this.userModel
-          .find({
-            isActive: { $ne: false },
-            $or: [
-              ...(activeTeamObjIds.length > 0 ? [{ teamId: { $in: activeTeamObjIds } }] : []),
-              ...(userObjId ? [{ _id: userObjId }] : []),
-              ...(memberIdsFromTeams.length > 0 ? [{ _id: { $in: memberIdsFromTeams } }] : []),
-            ],
-          })
-          .lean();
-      } else if (isTeamLeader) {
-        allUsers = await this.userModel
-          .find({
-            isActive: { $ne: false },
-            $or: [
-              ...(userObjId ? [{ reportsTo: userObjId }] : []),
-              ...(activeTeamObjIds.length > 0 ? [{ teamId: { $in: activeTeamObjIds } }] : []),
-              ...(userObjId ? [{ _id: userObjId }] : []),
-              ...(memberIdsFromTeams.length > 0 ? [{ _id: { $in: memberIdsFromTeams } }] : []),
-            ],
-          })
-          .lean();
-      } else {
-        allUsers = userObjId
-          ? await this.userModel.find({ isActive: { $ne: false }, _id: userObjId }).lean()
-          : [];
-      }
-    }
-
-    // Deduplicate users
-    const userMap = new Map<string, any>();
-    allUsers.forEach((u) => userMap.set(u._id.toString(), u));
-    allUsers = Array.from(userMap.values());
-
-    // 5. Build team folder nodes
-    const placedPageIds = new Set<string>();
-
-    const teamFolders = activeTeams.map((team) => {
-      const teamIdStr = team._id.toString();
-      const teamMemberStrIds = (team.members || []).map((m: any) => m.toString());
-
-      const teamMembers = allUsers.filter((u) => {
-        const uId = u._id.toString();
-        const matchesTeamId = u.teamId?.toString() === teamIdStr;
-        const matchesMembers = teamMemberStrIds.includes(uId);
-        return matchesTeamId || matchesMembers;
       });
 
-      const memberNodes = teamMembers.map((u) => {
-        const userIdStr = u._id.toString();
-        const roleLabel =
-          u.role === 'MANAGER'
-            ? 'Manager'
-            : ['TEAM_LEADER', 'TL', 'LEADER'].includes(this.normalizeRole(u.role))
-            ? 'TL'
-            : 'Member';
+      // Cycle-safe children attachment
+      const attachChildren = (page: any, visited = new Set<string>()): any => {
+        const pId = page._id?.toString();
+        if (!pId || visited.has(pId)) return { ...page, id: pId, children: [] };
+        visited.add(pId);
+        const children = (childrenByParent.get(pId) || []).map((c) =>
+          attachChildren(c, new Set(visited)),
+        );
+        return {
+          ...page,
+          id: page._id?.toString(),
+          children,
+        };
+      };
 
-        const userPages = pagesByAssignedMember.get(userIdStr) || [];
-        userPages.forEach((p: any) => {
+      const hydratedRootPages = rootPages.map((p) => attachChildren(p));
+
+      // 3. Map pages by assignedMemberId and by teamId
+      const pagesByAssignedMember = new Map<string, any[]>();
+      const genericPagesByTeam = new Map<string, any[]>();
+      const standalonePages: any[] = [];
+
+      hydratedRootPages.forEach((p) => {
+        if (p.section === 'PRIVATE' || p.section === 'WORKSPACE') return;
+
+        if (p.assignedMemberId) {
+          const uid = p.assignedMemberId.toString();
+          if (!pagesByAssignedMember.has(uid)) pagesByAssignedMember.set(uid, []);
+          pagesByAssignedMember.get(uid)!.push(p);
+        } else if (p.teamId) {
+          const tid = p.teamId.toString();
+          if (!genericPagesByTeam.has(tid)) genericPagesByTeam.set(tid, []);
+          genericPagesByTeam.get(tid)!.push(p);
+        } else {
+          standalonePages.push(p);
+        }
+      });
+
+      // 4. Fetch Teams and Users
+      let activeTeams: any[] = [];
+      let allUsers: any[] = [];
+
+      if (isAdmin) {
+        activeTeams = await this.teamModel.find({ isActive: { $ne: false } }).lean();
+        allUsers = await this.userModel.find({ isActive: { $ne: false } }).lean();
+      } else {
+        const teamQueryConds: any[] = [];
+        if (userObjId) {
+          teamQueryConds.push({ members: userObjId });
+          teamQueryConds.push({ members: userStr });
+          if (isManager) {
+            teamQueryConds.push({ managerId: userObjId });
+            teamQueryConds.push({ managerId: userStr });
+          }
+        }
+        if (userTeamObjId) {
+          teamQueryConds.push({ _id: userTeamObjId });
+        }
+        if (userTeamStr) {
+          try {
+            teamQueryConds.push({ _id: new Types.ObjectId(userTeamStr) });
+          } catch (_) {}
+        }
+
+        if (teamQueryConds.length > 0) {
+          activeTeams = await this.teamModel
+            .find({ isActive: { $ne: false }, $or: teamQueryConds })
+            .lean();
+        }
+
+        const activeTeamObjIds = activeTeams.map((t) => this.toSafeObjectId(t._id)).filter(Boolean);
+        const memberIdsFromTeams = activeTeams.flatMap((t) =>
+          (t.members || []).map((m: any) => this.toSafeObjectId(m)),
+        ).filter(Boolean);
+
+        if (isManager) {
+          allUsers = await this.userModel
+            .find({
+              isActive: { $ne: false },
+              $or: [
+                ...(activeTeamObjIds.length > 0 ? [{ teamId: { $in: activeTeamObjIds } }] : []),
+                ...(userObjId ? [{ _id: userObjId }] : []),
+                ...(memberIdsFromTeams.length > 0 ? [{ _id: { $in: memberIdsFromTeams } }] : []),
+              ],
+            })
+            .lean();
+        } else if (isTeamLeader) {
+          allUsers = await this.userModel
+            .find({
+              isActive: { $ne: false },
+              $or: [
+                ...(userObjId ? [{ reportsTo: userObjId }] : []),
+                ...(activeTeamObjIds.length > 0 ? [{ teamId: { $in: activeTeamObjIds } }] : []),
+                ...(userObjId ? [{ _id: userObjId }] : []),
+                ...(memberIdsFromTeams.length > 0 ? [{ _id: { $in: memberIdsFromTeams } }] : []),
+              ],
+            })
+            .lean();
+        } else {
+          allUsers = userObjId
+            ? await this.userModel.find({ isActive: { $ne: false }, _id: userObjId }).lean()
+            : [];
+        }
+      }
+
+      // Deduplicate users
+      const userMap = new Map<string, any>();
+      allUsers.forEach((u) => userMap.set(u._id.toString(), u));
+      allUsers = Array.from(userMap.values());
+
+      // 5. Build team folder nodes
+      const placedPageIds = new Set<string>();
+
+      const teamFolders = activeTeams.map((team) => {
+        const teamIdStr = team._id.toString();
+        const teamMemberStrIds = (team.members || []).map((m: any) => m.toString());
+
+        const teamMembers = allUsers.filter((u) => {
+          const uId = u._id.toString();
+          const matchesTeamId = u.teamId?.toString() === teamIdStr;
+          const matchesMembers = teamMemberStrIds.includes(uId);
+          return matchesTeamId || matchesMembers;
+        });
+
+        const memberNodes = teamMembers.map((u) => {
+          const userIdStr = u._id.toString();
+          const roleLabel =
+            u.role === 'MANAGER'
+              ? 'Manager'
+              : ['TEAM_LEADER', 'TL', 'LEADER'].includes(this.normalizeRole(u.role))
+              ? 'TL'
+              : 'Member';
+
+          const userPages = pagesByAssignedMember.get(userIdStr) || [];
+          userPages.forEach((p: any) => {
+            if (p._id) placedPageIds.add(p._id.toString());
+          });
+
+          return {
+            _id: `user_${userIdStr}`,
+            id: `user_${userIdStr}`,
+            title: `${u.firstName} ${u.lastName} (${roleLabel})`,
+            pageType: 'PAGE',
+            section: 'SHARED',
+            children: userPages,
+          };
+        });
+
+        const genericPages = genericPagesByTeam.get(teamIdStr) || [];
+        const visibleGenericPages = isAdmin || isManager || isTeamLeader
+          ? genericPages
+          : genericPages.filter((p: any) => p.createdBy?.toString() === userStr);
+
+        visibleGenericPages.forEach((p: any) => {
           if (p._id) placedPageIds.add(p._id.toString());
         });
 
         return {
-          _id: `user_${userIdStr}`,
-          id: `user_${userIdStr}`,
-          title: `${u.firstName} ${u.lastName} (${roleLabel})`,
+          _id: teamIdStr,
+          id: teamIdStr,
+          title: team.name,
           pageType: 'PAGE',
           section: 'SHARED',
-          children: userPages,
+          children: [...memberNodes, ...visibleGenericPages],
         };
       });
 
-      const genericPages = genericPagesByTeam.get(teamIdStr) || [];
-      const visibleGenericPages = isAdmin || isManager || isTeamLeader
-        ? genericPages
-        : genericPages.filter((p: any) => p.createdBy?.toString() === userStr);
+      // 6. Any unplaced pages that belong to the user or are accessible
+      const extraSharedPages: any[] = [];
 
-      visibleGenericPages.forEach((p: any) => {
-        if (p._id) placedPageIds.add(p._id.toString());
+      hydratedRootPages.forEach((p) => {
+        if (p.section === 'PRIVATE' || p.section === 'WORKSPACE') return;
+        const pid = p._id?.toString() || '';
+        if (placedPageIds.has(pid)) return;
+
+        if (isAdmin) {
+          // Admin sees all remaining shared pages
+          extraSharedPages.push(p);
+        } else if (userStr) {
+          // Non-admin sees their assigned, created, or shared pages
+          const isAssigned = p.assignedMemberId?.toString() === userStr;
+          const isCreator = p.createdBy?.toString() === userStr;
+          const isSharedWith = Array.isArray(p.sharedWith) && p.sharedWith.some((id: any) => id?.toString() === userStr);
+          if (isAssigned || isCreator || isSharedWith) {
+            extraSharedPages.push(p);
+          }
+        }
       });
 
+      // 7. Private and Workspace sections
+      const privatePages = hydratedRootPages.filter(
+        (p) =>
+          p.section === 'PRIVATE' &&
+          (isAdmin || p.createdBy?.toString() === userStr),
+      );
+
+      const workspacePages = hydratedRootPages.filter(
+        (p) =>
+          p.section === 'WORKSPACE' &&
+          (isAdmin || p.createdBy?.toString() === userStr || p.assignedMemberId?.toString() === userStr),
+      );
+
       return {
-        _id: teamIdStr,
-        id: teamIdStr,
-        title: team.name,
-        pageType: 'PAGE',
-        section: 'SHARED',
-        children: [...memberNodes, ...visibleGenericPages],
+        shared: [...teamFolders, ...extraSharedPages],
+        private: privatePages,
+        workspace: workspacePages,
       };
-    });
+    } catch (err) {
+      console.error('[getTree] Error generating page tree:', err);
+      // Failsafe fallback: return simple flat tree so UI never breaks
+      const fallbackPages = await this.pageModel
+        .find({ isDeleted: { $ne: true } })
+        .select('title pageType section assignedMemberId teamId')
+        .lean()
+        .catch(() => []);
 
-    // 6. Any unplaced pages that belong to the user or are accessible
-    const extraSharedPages: any[] = [];
-
-    hydratedRootPages.forEach((p) => {
-      if (p.section === 'PRIVATE' || p.section === 'WORKSPACE') return;
-      const pid = p._id?.toString() || '';
-      if (placedPageIds.has(pid)) return;
-
-      if (isAdmin) {
-        // Admin sees all remaining shared pages
-        extraSharedPages.push(p);
-      } else if (userStr) {
-        // Non-admin sees their assigned, created, or shared pages
-        const isAssigned = p.assignedMemberId?.toString() === userStr;
-        const isCreator = p.createdBy?.toString() === userStr;
-        const isSharedWith = Array.isArray(p.sharedWith) && p.sharedWith.some((id: any) => id?.toString() === userStr);
-        if (isAssigned || isCreator || isSharedWith) {
-          extraSharedPages.push(p);
-        }
-      }
-    });
-
-    // 7. Private and Workspace sections
-    const privatePages = hydratedRootPages.filter(
-      (p) =>
-        p.section === 'PRIVATE' &&
-        (isAdmin || p.createdBy?.toString() === userStr),
-    );
-
-    const workspacePages = hydratedRootPages.filter(
-      (p) =>
-        p.section === 'WORKSPACE' &&
-        (isAdmin || p.createdBy?.toString() === userStr || p.assignedMemberId?.toString() === userStr),
-    );
-
-    return {
-      shared: [...teamFolders, ...extraSharedPages],
-      private: privatePages,
-      workspace: workspacePages,
-    };
+      return {
+        shared: fallbackPages.filter((p: any) => p.section !== 'PRIVATE' && p.section !== 'WORKSPACE'),
+        private: fallbackPages.filter((p: any) => p.section === 'PRIVATE'),
+        workspace: fallbackPages.filter((p: any) => p.section === 'WORKSPACE'),
+      };
+    }
   }
 
   private async buildTeamRootNode(team: any, user: any, role: string) {
