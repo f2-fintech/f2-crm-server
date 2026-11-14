@@ -28,11 +28,11 @@ export class NotionPagesService implements OnModuleInit {
     private readonly mailService: MailService,
   ) { }
 
-  private remarksCache: { data: any; timestamp: number } | null = null;
+  private remarksCacheMap = new Map<string, { data: any[]; timestamp: number }>();
   private readonly REMARKS_CACHE_TTL = 90 * 1000; // 90 seconds in-memory cache
 
   public invalidateRemarksCache() {
-    this.remarksCache = null;
+    this.remarksCacheMap.clear();
   }
 
   async onModuleInit() {
@@ -618,7 +618,12 @@ export class NotionPagesService implements OnModuleInit {
       .find({ parentPageId: this.toSafeObjectId(id) as any, isDeleted: false })
       .select('-rows -content')
       .lean();
-    return { ...page, children };
+    return {
+      ...page,
+      rows: Array.isArray(page.rows) ? page.rows : [],
+      columns: Array.isArray(page.columns) ? page.columns : [],
+      children: Array.isArray(children) ? children : [],
+    };
   }
 
   async updatePage(id: string, updateData: any, user: any) {
@@ -990,18 +995,50 @@ export class NotionPagesService implements OnModuleInit {
       throw new ForbiddenException('You do not have access to update this page');
     }
 
+    let updated = false;
     if (body.rowId) {
-      await this.pageModel.updateOne(
+      const res = await this.pageModel.updateOne(
         { _id: id, 'rows.id': body.rowId },
         { $set: { [`rows.$.${body.field}`]: body.value } },
       );
-    } else if (typeof body.rowIndex === 'number' && body.rowIndex >= 0) {
-      await this.pageModel.updateOne(
+      if (res.matchedCount > 0) updated = true;
+    }
+
+    if (!updated && typeof body.rowIndex === 'number' && body.rowIndex >= 0) {
+      const res = await this.pageModel.updateOne(
         { _id: id },
         { $set: { [`rows.${body.rowIndex}.${body.field}`]: body.value } },
       );
-    } else {
-      throw new BadRequestException('Either rowId or valid rowIndex must be provided');
+      if (res.matchedCount > 0) updated = true;
+    }
+
+    if (!updated) {
+      // Fallback: If neither rowId nor valid rowIndex worked directly, do in-memory update
+      const fullPage = await this.pageModel.findById(id);
+      if (fullPage && Array.isArray(fullPage.rows)) {
+        let foundIdx = -1;
+        if (body.rowId) {
+          foundIdx = fullPage.rows.findIndex(
+            (r: any) => r && (r.id === body.rowId || r._id?.toString() === body.rowId),
+          );
+        }
+        if (foundIdx === -1 && typeof body.rowIndex === 'number' && body.rowIndex >= 0 && body.rowIndex < fullPage.rows.length) {
+          foundIdx = body.rowIndex;
+        }
+
+        if (foundIdx !== -1) {
+          const rowObj = fullPage.rows[foundIdx] || {};
+          rowObj[body.field] = body.value;
+          fullPage.rows[foundIdx] = rowObj;
+          fullPage.markModified('rows');
+          await fullPage.save();
+          updated = true;
+        }
+      }
+    }
+
+    if (!updated) {
+      throw new BadRequestException('Either valid rowId or rowIndex must be provided');
     }
 
     this.invalidateRemarksCache();
@@ -1018,25 +1055,65 @@ export class NotionPagesService implements OnModuleInit {
       sentiment?: string;
     },
   ) {
-    const role = user.role?.toUpperCase();
-    if (!['SUPER_ADMIN', 'ADMIN'].includes(role)) {
-      throw new ForbiddenException('Only admins can view unified remarks');
+    const rawRole = this.normalizeRole(user?.role);
+    const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(rawRole);
+    const isManager = rawRole === 'MANAGER';
+    const isTeamLeader = ['TEAM_LEADER', 'TL', 'LEADER'].includes(rawRole);
+
+    const userObjId = this.toSafeObjectId(user?._id);
+    const userTeamObjId = this.toSafeObjectId(user?.teamId);
+
+    // Build filter based on role so any authenticated staff member can view remarks safely
+    const pageFilter: any = { isDeleted: false, pageType: 'SHEET' };
+
+    if (!isAdmin) {
+      if (isManager && (userObjId || userTeamObjId)) {
+        const managedTeams = await this.teamModel.find({
+          isActive: { $ne: false },
+          $or: [
+            ...(userObjId ? [{ managerId: userObjId }, { members: userObjId }] : []),
+            ...(userTeamObjId ? [{ _id: userTeamObjId }] : []),
+          ],
+        }).select('_id').lean();
+        const teamIds = managedTeams.map((t) => t._id);
+        pageFilter.$or = [
+          { teamId: { $in: teamIds } },
+          { assignedMemberId: userObjId },
+          { createdBy: userObjId },
+        ];
+      } else if (isTeamLeader && (userObjId || userTeamObjId)) {
+        pageFilter.$or = [
+          ...(userTeamObjId ? [{ teamId: userTeamObjId }] : []),
+          { assignedMemberId: userObjId },
+          { createdBy: userObjId },
+        ];
+      } else if (userObjId) {
+        pageFilter.$or = [
+          { assignedMemberId: userObjId },
+          { createdBy: userObjId },
+          ...(userTeamObjId ? [{ teamId: userTeamObjId }] : []),
+        ];
+      }
     }
 
+    const cacheKey = isAdmin ? 'ALL' : `${rawRole}_${user?._id || 'anon'}`;
+    const cached = this.remarksCacheMap.get(cacheKey);
     const now = Date.now();
     let result: any[];
-    if (this.remarksCache && now - this.remarksCache.timestamp < this.REMARKS_CACHE_TTL) {
-      result = this.remarksCache.data;
+
+    if (cached && now - cached.timestamp < this.REMARKS_CACHE_TTL) {
+      result = cached.data;
     } else {
       const pages = await this.pageModel
-        .find({ isDeleted: false, pageType: 'SHEET' })
+        .find(pageFilter)
         .select('title columns rows createdAt teamId assignedMemberId')
         .populate('teamId', 'name')
         .populate('assignedMemberId', 'firstName lastName')
         .lean();
 
-      result = pages
+      result = (pages || [])
         .map((page: any) => {
+          if (!page) return null;
           const teamObj: any = page.teamId;
           const memberObj: any = page.assignedMemberId;
           const teamName = teamObj?.name || 'Unassigned';
@@ -1048,8 +1125,8 @@ export class NotionPagesService implements OnModuleInit {
           const colMap: Record<string, string> = {};
           if (Array.isArray(page.columns)) {
             page.columns.forEach((col: any) => {
-              if (col.key && col.name) {
-                colMap[col.key] = col.name;
+              if (col && col.key) {
+                colMap[col.key] = col.name || col.key;
               }
             });
           }
@@ -1057,7 +1134,7 @@ export class NotionPagesService implements OnModuleInit {
           // Identify which columns contain remarks/feedback
           const remarkKeys = Object.entries(colMap)
             .filter(([, name]) => {
-              const n = name.toLowerCase();
+              const n = String(name || '').toLowerCase();
               return (
                 n.includes('remark') ||
                 n.includes('feedback') ||
@@ -1068,21 +1145,23 @@ export class NotionPagesService implements OnModuleInit {
             .map(([key]) => key);
 
           // Also check sample rows (first 5) for raw keys like 'disposition', 'remarks', etc.
-          const sampleRows = (page.rows || []).slice(0, 5);
+          const sampleRows = Array.isArray(page.rows) ? page.rows.slice(0, 5) : [];
           sampleRows.forEach((row: any) => {
-            Object.keys(row).forEach((k) => {
-              if (k !== 'id') {
-                const kl = k.toLowerCase();
-                if (
-                  kl.includes('remark') ||
-                  kl.includes('feedback') ||
-                  kl.includes('comment') ||
-                  kl.includes('note')
-                ) {
-                  if (!remarkKeys.includes(k)) remarkKeys.push(k);
+            if (row && typeof row === 'object') {
+              Object.keys(row).forEach((k) => {
+                if (k !== 'id') {
+                  const kl = k.toLowerCase();
+                  if (
+                    kl.includes('remark') ||
+                    kl.includes('feedback') ||
+                    kl.includes('comment') ||
+                    kl.includes('note')
+                  ) {
+                    if (!remarkKeys.includes(k)) remarkKeys.push(k);
+                  }
                 }
-              }
-            });
+              });
+            }
           });
 
           let remarksFilled = 0;
@@ -1090,7 +1169,9 @@ export class NotionPagesService implements OnModuleInit {
           const rowsWithRemarksRaw: any[] = [];
 
           // Single pass over rows
-          (page.rows || []).forEach((row: any) => {
+          const safeRows = Array.isArray(page.rows) ? page.rows : [];
+          safeRows.forEach((row: any) => {
+            if (!row || typeof row !== 'object') return;
             const hasRemarkText = remarkKeys.some(
               (k) => row[k] && String(row[k]).trim() !== '',
             );
@@ -1108,7 +1189,7 @@ export class NotionPagesService implements OnModuleInit {
           // Map ONLY the rows that have remarks to human-readable objects
           // Limit to latest 50 remarks per sheet to keep JSON payload lean and fast
           const mappedRows = rowsWithRemarksRaw.slice(-50).map((row: any) => {
-            const readable: Record<string, any> = { _rowId: row.id };
+            const readable: Record<string, any> = { _rowId: String(row.id || '') };
             Object.entries(row).forEach(([key, value]) => {
               if (key === 'id') return;
               if (key === 'disposition') {
@@ -1126,23 +1207,23 @@ export class NotionPagesService implements OnModuleInit {
           });
 
           return {
-            _id: page._id,
-            title: page.title,
+            _id: page._id ? page._id.toString() : String(page._id),
+            title: page.title || 'Untitled Sheet',
             teamName,
             assignedTo,
             createdAt: page.createdAt,
-            columns: page.columns || [],
+            columns: Array.isArray(page.columns) ? page.columns : [],
             columnNames: Object.values(colMap),
             remarkColumnNames: remarkKeys.map((k) => colMap[k] || k),
-            totalRows: (page.rows || []).length,
+            totalRows: safeRows.length,
             remarksFilled,
             remarksEmpty,
             rows: mappedRows,
           };
         })
-        .filter((p) => p.totalRows > 0);
+        .filter(Boolean) as any[];
 
-      this.remarksCache = { data: result, timestamp: Date.now() };
+      this.remarksCacheMap.set(cacheKey, { data: result, timestamp: Date.now() });
     }
 
     // If options with page or limit are provided, return structured pagination
@@ -1155,9 +1236,9 @@ export class NotionPagesService implements OnModuleInit {
         const s = options.search.toLowerCase();
         filtered = filtered.filter(
           (p) =>
-            p.title.toLowerCase().includes(s) ||
-            p.teamName.toLowerCase().includes(s) ||
-            p.assignedTo.toLowerCase().includes(s),
+            (p.title && p.title.toLowerCase().includes(s)) ||
+            (p.teamName && p.teamName.toLowerCase().includes(s)) ||
+            (p.assignedTo && p.assignedTo.toLowerCase().includes(s)),
         );
       }
       const page = Math.max(1, options.page || 1);

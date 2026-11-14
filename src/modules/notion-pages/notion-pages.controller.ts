@@ -13,11 +13,12 @@ import {
 import { NotionPagesService } from './notion-pages.service';
 import { AuthGuard } from '@nestjs/passport';
 import type { Request } from 'express';
-import { IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString, IsNumber, Allow } from 'class-validator';
 import { UpdateNotionPageDto } from './dto/update-notion-page.dto';
 
 export class UpdateRowFieldDto {
   @IsOptional()
+  @IsNumber()
   rowIndex?: number;
 
   @IsOptional()
@@ -27,6 +28,7 @@ export class UpdateRowFieldDto {
   @IsString()
   field: string;
 
+  @Allow()
   value: any;
 }
 
