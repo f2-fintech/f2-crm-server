@@ -257,6 +257,9 @@ export class NotionPagesService implements OnModuleInit {
     const userTeamObjId = this.toSafeObjectId(user?.teamId);
     const userTeamStr = user?.teamId ? user.teamId.toString() : '';
 
+    console.log('[getTree] user:', JSON.stringify({ _id: user?._id, role: rawRole, teamId: user?.teamId, isAdmin, isManager, isTeamLeader }));
+
+    // Fetch ALL root-level pages (parentPageId null/missing/empty)
     const pages = await this.pageModel
       .find({
         isDeleted: { $ne: true },
@@ -269,21 +272,26 @@ export class NotionPagesService implements OnModuleInit {
       .select('-rows -content')
       .lean();
 
+    console.log('[getTree] total root pages found:', pages.length, pages.map(p => ({ _id: p._id, title: p.title, section: p.section, teamId: p.teamId, assignedMemberId: p.assignedMemberId, isDeleted: p.isDeleted })));
+
+    // Map pages by assignedMemberId and by teamId (for generic team-level pages)
     const pagesByAssignedMember = new Map<string, any[]>();
     const genericPagesByTeam = new Map<string, any[]>();
+    const unplacedPages: any[] = [];
 
     pages.forEach((p) => {
-      if (!p.parentPageId) {
-        if (p.assignedMemberId) {
-          const uid = p.assignedMemberId.toString();
-          if (!pagesByAssignedMember.has(uid))
-            pagesByAssignedMember.set(uid, []);
-          pagesByAssignedMember.get(uid)!.push(p);
-        } else if (p.teamId) {
-          const tid = p.teamId.toString();
-          if (!genericPagesByTeam.has(tid)) genericPagesByTeam.set(tid, []);
-          genericPagesByTeam.get(tid)!.push(p);
-        }
+      const pId = p._id?.toString();
+      if (p.assignedMemberId) {
+        const uid = p.assignedMemberId.toString();
+        if (!pagesByAssignedMember.has(uid)) pagesByAssignedMember.set(uid, []);
+        pagesByAssignedMember.get(uid)!.push(p);
+      } else if (p.teamId) {
+        const tid = p.teamId.toString();
+        if (!genericPagesByTeam.has(tid)) genericPagesByTeam.set(tid, []);
+        genericPagesByTeam.get(tid)!.push(p);
+      } else {
+        // No assignedMember and no team — truly standalone
+        unplacedPages.push(p);
       }
     });
 
@@ -294,55 +302,57 @@ export class NotionPagesService implements OnModuleInit {
       activeTeams = await this.teamModel.find({ isActive: { $ne: false } }).lean();
       allUsers = await this.userModel.find({ isActive: { $ne: false } }).lean();
     } else {
-      const userIdentities = [userObjId, userStr].filter(Boolean);
-      const teamIdentities = [userTeamObjId, userTeamStr].filter(Boolean);
-
+      // Build team query: match by user being a member, or by user's teamId
       const teamQueryConds: any[] = [];
-      if (userIdentities.length > 0) {
-        teamQueryConds.push({ members: { $in: userIdentities } });
+
+      if (userObjId) {
+        // Match teams where this user is in members array (ObjectId or string)
+        teamQueryConds.push({ members: userObjId });
+        teamQueryConds.push({ members: userStr });
         if (isManager) {
-          teamQueryConds.push({ managerId: { $in: userIdentities } });
+          teamQueryConds.push({ managerId: userObjId });
+          teamQueryConds.push({ managerId: userStr });
         }
       }
-      if (teamIdentities.length > 0) {
-        teamQueryConds.push({ _id: { $in: teamIdentities } });
+      if (userTeamObjId) {
+        teamQueryConds.push({ _id: userTeamObjId });
+      }
+      if (userTeamStr) {
+        try {
+          teamQueryConds.push({ _id: new Types.ObjectId(userTeamStr) });
+        } catch (_) { /* ignore invalid objectid */ }
       }
 
       if (teamQueryConds.length === 0) {
         activeTeams = [];
       } else {
         activeTeams = await this.teamModel
-          .find({
-            isActive: { $ne: false },
-            $or: teamQueryConds,
-          })
+          .find({ isActive: { $ne: false }, $or: teamQueryConds })
           .lean();
       }
 
-      const activeTeamObjIds = activeTeams
-        .map((t) => this.toSafeObjectId(t._id))
-        .filter(Boolean);
+      console.log('[getTree] activeTeams for user:', activeTeams.map(t => ({ _id: t._id, name: t.name, managerId: t.managerId, members: t.members })));
+
+      const activeTeamObjIds = activeTeams.map((t) => this.toSafeObjectId(t._id)).filter(Boolean);
+      const activeTeamStrIds = activeTeams.map((t) => t._id.toString());
+
+      // Build allUsers for this role
+      const memberIdsFromTeams = activeTeams.flatMap((t) =>
+        (t.members || []).map((m: any) => this.toSafeObjectId(m)),
+      ).filter(Boolean);
 
       if (isManager) {
-        const memberIds = activeTeams.flatMap((t) =>
-          (t.members || []).map((m: any) => this.toSafeObjectId(m)),
-        ).filter(Boolean);
-
         allUsers = await this.userModel
           .find({
             isActive: { $ne: false },
             $or: [
               ...(activeTeamObjIds.length > 0 ? [{ teamId: { $in: activeTeamObjIds } }] : []),
               ...(userObjId ? [{ _id: userObjId }] : []),
-              ...(memberIds.length > 0 ? [{ _id: { $in: memberIds } }] : []),
+              ...(memberIdsFromTeams.length > 0 ? [{ _id: { $in: memberIdsFromTeams } }] : []),
             ],
           })
           .lean();
       } else if (isTeamLeader) {
-        const memberIds = activeTeams.flatMap((t) =>
-          (t.members || []).map((m: any) => this.toSafeObjectId(m)),
-        ).filter(Boolean);
-
         allUsers = await this.userModel
           .find({
             isActive: { $ne: false },
@@ -350,26 +360,26 @@ export class NotionPagesService implements OnModuleInit {
               ...(userObjId ? [{ reportsTo: userObjId }] : []),
               ...(activeTeamObjIds.length > 0 ? [{ teamId: { $in: activeTeamObjIds } }] : []),
               ...(userObjId ? [{ _id: userObjId }] : []),
-              ...(memberIds.length > 0 ? [{ _id: { $in: memberIds } }] : []),
+              ...(memberIdsFromTeams.length > 0 ? [{ _id: { $in: memberIdsFromTeams } }] : []),
             ],
           })
           .lean();
       } else {
+        // EMPLOYEE / SOURCER / CHANNEL_PARTNER — just self
         allUsers = userObjId
-          ? await this.userModel
-              .find({
-                isActive: { $ne: false },
-                _id: userObjId,
-              })
-              .lean()
+          ? await this.userModel.find({ isActive: { $ne: false }, _id: userObjId }).lean()
           : [];
       }
     }
 
+    console.log('[getTree] allUsers count:', allUsers.length, allUsers.map(u => ({ _id: u._id, name: `${u.firstName} ${u.lastName}`, role: u.role, teamId: u.teamId })));
+
+    // Deduplicate users
     const userMap = new Map<string, any>();
     allUsers.forEach((u) => userMap.set(u._id.toString(), u));
     allUsers = Array.from(userMap.values());
 
+    // Build team folder nodes
     const teamFolders = activeTeams.map((team) => {
       const teamIdStr = team._id.toString();
       const teamMemberStrIds = (team.members || []).map((m: any) => m.toString());
@@ -381,6 +391,8 @@ export class NotionPagesService implements OnModuleInit {
         return matchesTeamId || matchesMembers;
       });
 
+      console.log(`[getTree] team "${team.name}" has ${teamMembers.length} members, genericPages: ${genericPagesByTeam.get(teamIdStr)?.length || 0}`);
+
       const memberNodes = teamMembers.map((u) => {
         const userIdStr = u._id.toString();
         const roleLabel =
@@ -390,20 +402,24 @@ export class NotionPagesService implements OnModuleInit {
             ? 'TL'
             : 'Member';
 
+        const userPages = pagesByAssignedMember.get(userIdStr) || [];
+        console.log(`[getTree]   member "${u.firstName} ${u.lastName}" (${userIdStr}) has ${userPages.length} assigned pages`);
+
         return {
           _id: `user_${userIdStr}`,
           id: `user_${userIdStr}`,
           title: `${u.firstName} ${u.lastName} (${roleLabel})`,
           pageType: 'PAGE',
           section: 'SHARED',
-          children: pagesByAssignedMember.get(userIdStr) || [],
+          children: userPages,
         };
       });
 
-      const genericPages =
-        isAdmin || isManager || isTeamLeader
-          ? genericPagesByTeam.get(teamIdStr) || []
-          : [];
+      // Generic team pages visible to admin/manager/TL; for employee, also show if they created them
+      const genericPages = genericPagesByTeam.get(teamIdStr) || [];
+      const visibleGenericPages = isAdmin || isManager || isTeamLeader
+        ? genericPages
+        : genericPages.filter((p: any) => p.createdBy?.toString() === userStr);
 
       return {
         _id: teamIdStr,
@@ -411,11 +427,11 @@ export class NotionPagesService implements OnModuleInit {
         title: team.name,
         pageType: 'PAGE',
         section: 'SHARED',
-        children: [...memberNodes, ...genericPages],
+        children: [...memberNodes, ...visibleGenericPages],
       };
     });
 
-    // Collect all page IDs placed in teams or user nodes
+    // Track placed page IDs to avoid duplicates in standalone section
     const placedPageIds = new Set<string>();
     teamFolders.forEach((tf) => {
       (tf.children || []).forEach((child: any) => {
@@ -430,15 +446,32 @@ export class NotionPagesService implements OnModuleInit {
       });
     });
 
-    // Standalone pages: Any non-private page not placed inside a team
-    const standalonePages = pages.filter(
-      (p) =>
-        p.section !== 'PRIVATE' &&
-        !placedPageIds.has(p._id.toString()),
-    );
+    // For non-admin: also expose pages directly assigned to or created by this user
+    // that didn't get placed inside a team (e.g. user not yet in team members array)
+    const directUserPages: any[] = [];
+    if (!isAdmin && userStr) {
+      pages.forEach((p) => {
+        const pid = p._id?.toString() || '';
+        if (placedPageIds.has(pid)) return; // already placed
+        if (p.section === 'PRIVATE') return; // handled separately
+        if (p.section === 'WORKSPACE') return; // handled separately
+        const isAssignedToMe = p.assignedMemberId?.toString() === userStr;
+        const isCreatedByMe = p.createdBy?.toString() === userStr;
+        if (isAssignedToMe || isCreatedByMe) {
+          directUserPages.push(p);
+          placedPageIds.add(pid);
+        }
+      });
+      console.log('[getTree] directUserPages (fallback for non-admin):', directUserPages.length);
+    }
+
+    // Admin-only standalone pages (no team, no assigned member)
+    const standaloneAdminPages = isAdmin
+      ? unplacedPages.filter((p) => p.section !== 'PRIVATE' && p.section !== 'WORKSPACE' && !placedPageIds.has(p._id?.toString()))
+      : [];
 
     return {
-      shared: [...teamFolders, ...standalonePages],
+      shared: [...teamFolders, ...directUserPages, ...standaloneAdminPages],
       private: pages.filter(
         (p) =>
           p.section === 'PRIVATE' &&
@@ -447,7 +480,7 @@ export class NotionPagesService implements OnModuleInit {
       workspace: pages.filter(
         (p) =>
           p.section === 'WORKSPACE' &&
-          (isAdmin || p.createdBy?.toString() === userStr),
+          (isAdmin || p.createdBy?.toString() === userStr || p.assignedMemberId?.toString() === userStr),
       ),
     };
   }
