@@ -257,30 +257,50 @@ export class NotionPagesService implements OnModuleInit {
     const userTeamObjId = this.toSafeObjectId(user?.teamId);
     const userTeamStr = user?.teamId ? user.teamId.toString() : '';
 
-    console.log('[getTree] user:', JSON.stringify({ _id: user?._id, role: rawRole, teamId: user?.teamId, isAdmin, isManager, isTeamLeader }));
-
-    // Fetch ALL root-level pages (parentPageId null/missing/empty)
-    const pages = await this.pageModel
+    // 1. Fetch ALL non-deleted pages (safe query: no invalid cast on parentPageId)
+    const allPages = await this.pageModel
       .find({
         isDeleted: { $ne: true },
-        $or: [
-          { parentPageId: null },
-          { parentPageId: { $exists: false } },
-          { parentPageId: '' as any },
-        ],
       })
       .select('-rows -content')
       .lean();
 
-    console.log('[getTree] total root pages found:', pages.length, pages.map(p => ({ _id: p._id, title: p.title, section: p.section, teamId: p.teamId, assignedMemberId: p.assignedMemberId, isDeleted: p.isDeleted })));
+    // 2. Build parent -> children map and identify root pages
+    const allPageIds = new Set(allPages.map((p) => p._id.toString()));
+    const childrenByParent = new Map<string, any[]>();
+    const rootPages: any[] = [];
 
-    // Map pages by assignedMemberId and by teamId (for generic team-level pages)
+    allPages.forEach((p) => {
+      const parentId = p.parentPageId ? p.parentPageId.toString() : null;
+      if (parentId && allPageIds.has(parentId)) {
+        if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+        childrenByParent.get(parentId)!.push(p);
+      } else {
+        // Root page or orphaned page whose parent was deleted
+        rootPages.push(p);
+      }
+    });
+
+    const attachChildren = (page: any): any => {
+      const pId = page._id?.toString();
+      const children = (childrenByParent.get(pId) || []).map(attachChildren);
+      return {
+        ...page,
+        id: page._id?.toString(),
+        children,
+      };
+    };
+
+    const hydratedRootPages = rootPages.map(attachChildren);
+
+    // 3. Map pages by assignedMemberId and by teamId
     const pagesByAssignedMember = new Map<string, any[]>();
     const genericPagesByTeam = new Map<string, any[]>();
-    const unplacedPages: any[] = [];
+    const standalonePages: any[] = [];
 
-    pages.forEach((p) => {
-      const pId = p._id?.toString();
+    hydratedRootPages.forEach((p) => {
+      if (p.section === 'PRIVATE' || p.section === 'WORKSPACE') return;
+
       if (p.assignedMemberId) {
         const uid = p.assignedMemberId.toString();
         if (!pagesByAssignedMember.has(uid)) pagesByAssignedMember.set(uid, []);
@@ -290,11 +310,11 @@ export class NotionPagesService implements OnModuleInit {
         if (!genericPagesByTeam.has(tid)) genericPagesByTeam.set(tid, []);
         genericPagesByTeam.get(tid)!.push(p);
       } else {
-        // No assignedMember and no team — truly standalone
-        unplacedPages.push(p);
+        standalonePages.push(p);
       }
     });
 
+    // 4. Fetch Teams and Users
     let activeTeams: any[] = [];
     let allUsers: any[] = [];
 
@@ -302,11 +322,8 @@ export class NotionPagesService implements OnModuleInit {
       activeTeams = await this.teamModel.find({ isActive: { $ne: false } }).lean();
       allUsers = await this.userModel.find({ isActive: { $ne: false } }).lean();
     } else {
-      // Build team query: match by user being a member, or by user's teamId
       const teamQueryConds: any[] = [];
-
       if (userObjId) {
-        // Match teams where this user is in members array (ObjectId or string)
         teamQueryConds.push({ members: userObjId });
         teamQueryConds.push({ members: userStr });
         if (isManager) {
@@ -320,23 +337,16 @@ export class NotionPagesService implements OnModuleInit {
       if (userTeamStr) {
         try {
           teamQueryConds.push({ _id: new Types.ObjectId(userTeamStr) });
-        } catch (_) { /* ignore invalid objectid */ }
+        } catch (_) {}
       }
 
-      if (teamQueryConds.length === 0) {
-        activeTeams = [];
-      } else {
+      if (teamQueryConds.length > 0) {
         activeTeams = await this.teamModel
           .find({ isActive: { $ne: false }, $or: teamQueryConds })
           .lean();
       }
 
-      console.log('[getTree] activeTeams for user:', activeTeams.map(t => ({ _id: t._id, name: t.name, managerId: t.managerId, members: t.members })));
-
       const activeTeamObjIds = activeTeams.map((t) => this.toSafeObjectId(t._id)).filter(Boolean);
-      const activeTeamStrIds = activeTeams.map((t) => t._id.toString());
-
-      // Build allUsers for this role
       const memberIdsFromTeams = activeTeams.flatMap((t) =>
         (t.members || []).map((m: any) => this.toSafeObjectId(m)),
       ).filter(Boolean);
@@ -365,21 +375,20 @@ export class NotionPagesService implements OnModuleInit {
           })
           .lean();
       } else {
-        // EMPLOYEE / SOURCER / CHANNEL_PARTNER — just self
         allUsers = userObjId
           ? await this.userModel.find({ isActive: { $ne: false }, _id: userObjId }).lean()
           : [];
       }
     }
 
-    console.log('[getTree] allUsers count:', allUsers.length, allUsers.map(u => ({ _id: u._id, name: `${u.firstName} ${u.lastName}`, role: u.role, teamId: u.teamId })));
-
     // Deduplicate users
     const userMap = new Map<string, any>();
     allUsers.forEach((u) => userMap.set(u._id.toString(), u));
     allUsers = Array.from(userMap.values());
 
-    // Build team folder nodes
+    // 5. Build team folder nodes
+    const placedPageIds = new Set<string>();
+
     const teamFolders = activeTeams.map((team) => {
       const teamIdStr = team._id.toString();
       const teamMemberStrIds = (team.members || []).map((m: any) => m.toString());
@@ -391,8 +400,6 @@ export class NotionPagesService implements OnModuleInit {
         return matchesTeamId || matchesMembers;
       });
 
-      console.log(`[getTree] team "${team.name}" has ${teamMembers.length} members, genericPages: ${genericPagesByTeam.get(teamIdStr)?.length || 0}`);
-
       const memberNodes = teamMembers.map((u) => {
         const userIdStr = u._id.toString();
         const roleLabel =
@@ -403,7 +410,9 @@ export class NotionPagesService implements OnModuleInit {
             : 'Member';
 
         const userPages = pagesByAssignedMember.get(userIdStr) || [];
-        console.log(`[getTree]   member "${u.firstName} ${u.lastName}" (${userIdStr}) has ${userPages.length} assigned pages`);
+        userPages.forEach((p: any) => {
+          if (p._id) placedPageIds.add(p._id.toString());
+        });
 
         return {
           _id: `user_${userIdStr}`,
@@ -415,11 +424,14 @@ export class NotionPagesService implements OnModuleInit {
         };
       });
 
-      // Generic team pages visible to admin/manager/TL; for employee, also show if they created them
       const genericPages = genericPagesByTeam.get(teamIdStr) || [];
       const visibleGenericPages = isAdmin || isManager || isTeamLeader
         ? genericPages
         : genericPages.filter((p: any) => p.createdBy?.toString() === userStr);
+
+      visibleGenericPages.forEach((p: any) => {
+        if (p._id) placedPageIds.add(p._id.toString());
+      });
 
       return {
         _id: teamIdStr,
@@ -431,57 +443,45 @@ export class NotionPagesService implements OnModuleInit {
       };
     });
 
-    // Track placed page IDs to avoid duplicates in standalone section
-    const placedPageIds = new Set<string>();
-    teamFolders.forEach((tf) => {
-      (tf.children || []).forEach((child: any) => {
-        if (child.children && Array.isArray(child.children)) {
-          child.children.forEach((p: any) => {
-            if (p._id) placedPageIds.add(p._id.toString());
-          });
+    // 6. Any unplaced pages that belong to the user or are accessible
+    const extraSharedPages: any[] = [];
+
+    hydratedRootPages.forEach((p) => {
+      if (p.section === 'PRIVATE' || p.section === 'WORKSPACE') return;
+      const pid = p._id?.toString() || '';
+      if (placedPageIds.has(pid)) return;
+
+      if (isAdmin) {
+        // Admin sees all remaining shared pages
+        extraSharedPages.push(p);
+      } else if (userStr) {
+        // Non-admin sees their assigned, created, or shared pages
+        const isAssigned = p.assignedMemberId?.toString() === userStr;
+        const isCreator = p.createdBy?.toString() === userStr;
+        const isSharedWith = Array.isArray(p.sharedWith) && p.sharedWith.some((id: any) => id?.toString() === userStr);
+        if (isAssigned || isCreator || isSharedWith) {
+          extraSharedPages.push(p);
         }
-        if (child._id && !child._id.toString().startsWith('user_')) {
-          placedPageIds.add(child._id.toString());
-        }
-      });
+      }
     });
 
-    // For non-admin: also expose pages directly assigned to or created by this user
-    // that didn't get placed inside a team (e.g. user not yet in team members array)
-    const directUserPages: any[] = [];
-    if (!isAdmin && userStr) {
-      pages.forEach((p) => {
-        const pid = p._id?.toString() || '';
-        if (placedPageIds.has(pid)) return; // already placed
-        if (p.section === 'PRIVATE') return; // handled separately
-        if (p.section === 'WORKSPACE') return; // handled separately
-        const isAssignedToMe = p.assignedMemberId?.toString() === userStr;
-        const isCreatedByMe = p.createdBy?.toString() === userStr;
-        if (isAssignedToMe || isCreatedByMe) {
-          directUserPages.push(p);
-          placedPageIds.add(pid);
-        }
-      });
-      console.log('[getTree] directUserPages (fallback for non-admin):', directUserPages.length);
-    }
+    // 7. Private and Workspace sections
+    const privatePages = hydratedRootPages.filter(
+      (p) =>
+        p.section === 'PRIVATE' &&
+        (isAdmin || p.createdBy?.toString() === userStr),
+    );
 
-    // Admin-only standalone pages (no team, no assigned member)
-    const standaloneAdminPages = isAdmin
-      ? unplacedPages.filter((p) => p.section !== 'PRIVATE' && p.section !== 'WORKSPACE' && !placedPageIds.has(p._id?.toString()))
-      : [];
+    const workspacePages = hydratedRootPages.filter(
+      (p) =>
+        p.section === 'WORKSPACE' &&
+        (isAdmin || p.createdBy?.toString() === userStr || p.assignedMemberId?.toString() === userStr),
+    );
 
     return {
-      shared: [...teamFolders, ...directUserPages, ...standaloneAdminPages],
-      private: pages.filter(
-        (p) =>
-          p.section === 'PRIVATE' &&
-          (p.createdBy?.toString() === userStr || isAdmin),
-      ),
-      workspace: pages.filter(
-        (p) =>
-          p.section === 'WORKSPACE' &&
-          (isAdmin || p.createdBy?.toString() === userStr || p.assignedMemberId?.toString() === userStr),
-      ),
+      shared: [...teamFolders, ...extraSharedPages],
+      private: privatePages,
+      workspace: workspacePages,
     };
   }
 
@@ -496,7 +496,11 @@ export class NotionPagesService implements OnModuleInit {
     const userObjId = this.toSafeObjectId(user?._id);
 
     const teamPages = await this.pageModel
-      .find({ teamId: (teamObjId || team._id) as any, isDeleted: false, parentPageId: null })
+      .find({
+        teamId: (teamObjId || team._id) as any,
+        isDeleted: { $ne: true },
+        $or: [{ parentPageId: null }, { parentPageId: { $exists: false } }],
+      })
       .select('-rows -content')
       .lean();
 
