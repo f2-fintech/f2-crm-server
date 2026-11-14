@@ -18,6 +18,21 @@ import { SlaConfigService } from '../sla-config/sla-config.service';
 
 @Injectable()
 export class DashboardService {
+  private cache = new Map<string, { data: any; timestamp: number }>();
+  private readonly CACHE_TTL = 60 * 1000; // 60 seconds
+
+  private getFromCache(key: string): any | null {
+    const entry = this.cache.get(key);
+    if (entry && Date.now() - entry.timestamp < this.CACHE_TTL) {
+      return entry.data;
+    }
+    return null;
+  }
+
+  private setInCache(key: string, data: any) {
+    this.cache.set(key, { data, timestamp: Date.now() });
+  }
+
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Team.name) private teamModel: Model<TeamDocument>,
@@ -37,6 +52,10 @@ export class DashboardService {
 
   async getDashboardData(user: any) {
     const role = user?.role?.toUpperCase();
+    const userId = user?.id || user?._id || 'anon';
+    const cacheKey = `dashboard_${role}_${userId}`;
+    const cached = this.getFromCache(cacheKey);
+    if (cached) return cached;
 
     if (role === 'MANAGER' || role === 'TEAM_LEADER') {
       const isTeamLeader = role === 'TEAM_LEADER';
@@ -164,7 +183,7 @@ export class DashboardService {
         },
       ];
 
-      return {
+      const result = {
         success: true,
         data: {
           roleType: role,
@@ -189,6 +208,8 @@ export class DashboardService {
           },
         },
       };
+      this.setInCache(cacheKey, result);
+      return result;
     }
 
     if (['EMPLOYEE', 'SOURCER', 'CHANNEL_PARTNER'].includes(role)) {
@@ -262,7 +283,7 @@ export class DashboardService {
         },
       ];
 
-      return {
+      const result = {
         success: true,
         data: {
           roleType: role,
@@ -272,6 +293,8 @@ export class DashboardService {
           monthlyLeads: { data: [] },
         },
       };
+      this.setInCache(cacheKey, result);
+      return result;
     }
 
     // Default Admin/Super Admin Dashboard
@@ -362,7 +385,7 @@ export class DashboardService {
       .select('firstName lastName email profileImage createdAt')
       .exec();
 
-    return {
+    const result = {
       success: true,
       data: {
         roleType: 'ADMIN',
@@ -394,11 +417,19 @@ export class DashboardService {
         },
       },
     };
+    this.setInCache(cacheKey, result);
+    return result;
   }
 
   // --- PHASE 5: REAL-TIME MOVEMENT & MANAGEMENT DASHBOARD ANALYTICS ---
 
   async getPipelineData(user: any) {
+    const role = user?.role?.toUpperCase();
+    const userId = user?.id || user?._id || 'anon';
+    const cacheKey = `pipeline_${role}_${userId}`;
+    const cached = this.getFromCache(cacheKey);
+    if (cached) return cached;
+
     // Current Pipeline (Active Leads, Apps, Customers)
     // We filter by assignedTo if not admin, but for now we'll do global or simple filters
     const matchCondition = { isDeleted: false };
@@ -424,7 +455,7 @@ export class DashboardService {
       this.customerModel.countDocuments({ ...matchCondition, status: { $in: ['INACTIVE', 'CLOSED'] } }),
     ]);
 
-    return {
+    const result = {
       success: true,
       data: {
         leads: { total: totalLeads, active: activeLeads, qualified: qualifiedLeads, converted: convertedLeads },
@@ -432,9 +463,15 @@ export class DashboardService {
         customers: { active: activeCustomers, closed: closedCustomers }
       }
     };
+    this.setInCache(cacheKey, result);
+    return result;
   }
 
   async getMovementData(timeframe: string = 'today') {
+    const cacheKey = `movement_${timeframe}`;
+    const cached = this.getFromCache(cacheKey);
+    if (cached) return cached;
+
     // Determine date filter
     const now = new Date();
     let startDate = new Date();
@@ -472,7 +509,7 @@ export class DashboardService {
       .exec();
 
     // Populate entity details? We store customerId or leadId. We can leave it raw for UI to handle if simple
-    return {
+    const result = {
       success: true,
       data: {
         timeframe,
@@ -480,9 +517,15 @@ export class DashboardService {
         recentEvents
       }
     };
+    this.setInCache(cacheKey, result);
+    return result;
   }
 
   async getStageAging() {
+    const cacheKey = 'stage_aging';
+    const cached = this.getFromCache(cacheKey);
+    if (cached) return cached;
+
     const slas = await this.slaConfigService.findAll();
 
     // Create an object for quick SLA lookup by entityType_stage
@@ -552,16 +595,22 @@ export class DashboardService {
 
     attentionRequired.sort((a, b) => b.durationDays - a.durationDays);
 
-    return {
+    const result = {
       success: true,
       data: {
         agingStats,
         attentionRequired: attentionRequired.slice(0, 15) // Top 15 attention required
       }
     };
+    this.setInCache(cacheKey, result);
+    return result;
   }
 
   async getSlaOverview() {
+    const cacheKey = 'sla_overview';
+    const cached = this.getFromCache(cacheKey);
+    if (cached) return cached;
+
     const slas = await this.slaConfigService.findAll();
     const slaMap = {};
     slas.forEach(sla => {
@@ -591,7 +640,7 @@ export class DashboardService {
       }
     });
 
-    return {
+    const result = {
       success: true,
       data: {
         totalActive: total,
@@ -601,9 +650,15 @@ export class DashboardService {
         notConfigured
       }
     };
+    this.setInCache(cacheKey, result);
+    return result;
   }
 
   async getAgentWorkload() {
+    const cacheKey = 'agent_workload';
+    const cached = this.getFromCache(cacheKey);
+    if (cached) return cached;
+
     // 1. Get all agents/users to map by ID
     const users = await this.userModel.find({ isActive: true }).select('firstName lastName').lean().exec();
     const userMap: Record<string, any> = {};
@@ -722,6 +777,10 @@ export class DashboardService {
   }
 
   async getAgentActivity(timeframe: string = 'today') {
+    const cacheKey = `agent_activity_${timeframe}`;
+    const cached = this.getFromCache(cacheKey);
+    if (cached) return cached;
+
     const now = new Date();
     let startDate = new Date();
     startDate.setHours(0, 0, 0, 0);
@@ -782,13 +841,19 @@ export class DashboardService {
       (b.leadsConverted + b.appsApproved) - (a.leadsConverted + a.appsApproved)
     );
 
-    return {
+    const result = {
       success: true,
       data: activityTable
     };
+    this.setInCache(cacheKey, result);
+    return result;
   }
 
   async getVolumeForecast() {
+    const cacheKey = 'volume_forecast';
+    const cached = this.getFromCache(cacheKey);
+    if (cached) return cached;
+
     // Current date logic
     const now = new Date();
     const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -832,7 +897,7 @@ export class DashboardService {
       return data;
     };
 
-    return {
+    const result = {
       success: true,
       data: {
         Leads: ensureNonEmpty(leads, 1250),
@@ -845,5 +910,7 @@ export class DashboardService {
         }
       }
     };
+    this.setInCache(cacheKey, result);
+    return result;
   }
 }

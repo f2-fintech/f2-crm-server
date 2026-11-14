@@ -31,8 +31,21 @@ export class NotionPagesService implements OnModuleInit {
   private remarksCacheMap = new Map<string, { data: any[]; timestamp: number }>();
   private readonly REMARKS_CACHE_TTL = 90 * 1000; // 90 seconds in-memory cache
 
+  private treeCacheMap = new Map<string, { data: any; timestamp: number }>();
+  private readonly TREE_CACHE_TTL = 45 * 1000; // 45 seconds cache for instant tree loading
+
+  public invalidateCache() {
+    this.remarksCacheMap.clear();
+    this.treeCacheMap.clear();
+  }
+
   public invalidateRemarksCache() {
     this.remarksCacheMap.clear();
+    this.treeCacheMap.clear();
+  }
+
+  public invalidateTreeCache() {
+    this.treeCacheMap.clear();
   }
 
   async onModuleInit() {
@@ -150,6 +163,7 @@ export class NotionPagesService implements OnModuleInit {
       }
     }
 
+    this.invalidateCache();
     return saved;
   }
 
@@ -258,26 +272,127 @@ export class NotionPagesService implements OnModuleInit {
       const userTeamObjId = this.toSafeObjectId(user?.teamId);
       const userTeamStr = user?.teamId ? user.teamId.toString() : '';
 
-      // 1. Fetch ALL non-deleted pages (safe query: no invalid cast on parentPageId)
-      const allPages = await this.pageModel
-        .find({
-          isDeleted: { $ne: true },
-        })
-        .select('-rows -content')
+      // Check In-Memory Cache for ultra-fast instant response (< 5ms)
+      const cacheKey = `${rawRole}_${userStr}`;
+      const cached = this.treeCacheMap.get(cacheKey);
+      const now = Date.now();
+      if (cached && now - cached.timestamp < this.TREE_CACHE_TTL) {
+        return cached.data;
+      }
+
+      // Fast parallel fetch with INCLUSIVE projections (skips multi-megabyte `rows` and `content` arrays)
+      const pagesPromise = this.pageModel
+        .find({ isDeleted: { $ne: true } })
+        .select('_id title pageType section parentPageId assignedMemberId teamId createdBy sharedWith')
         .lean();
 
+      let teamsPromise: Promise<any[]>;
+      let usersPromise: Promise<any[]>;
+
+      if (isAdmin) {
+        teamsPromise = this.teamModel
+          .find({ isActive: { $ne: false } })
+          .select('_id name managerId members isActive')
+          .lean();
+        usersPromise = this.userModel
+          .find({ isActive: { $ne: false } })
+          .select('_id firstName lastName email role teamId reportsTo isActive')
+          .lean();
+      } else {
+        const teamQueryConds: any[] = [];
+        if (userObjId) {
+          teamQueryConds.push({ members: userObjId });
+          teamQueryConds.push({ members: userStr });
+          if (isManager) {
+            teamQueryConds.push({ managerId: userObjId });
+            teamQueryConds.push({ managerId: userStr });
+          }
+        }
+        if (userTeamObjId) {
+          teamQueryConds.push({ _id: userTeamObjId });
+        }
+        if (userTeamStr) {
+          try {
+            teamQueryConds.push({ _id: new Types.ObjectId(userTeamStr) });
+          } catch (_) {}
+        }
+
+        teamsPromise = teamQueryConds.length > 0
+          ? this.teamModel
+              .find({ isActive: { $ne: false }, $or: teamQueryConds })
+              .select('_id name managerId members isActive')
+              .lean()
+          : Promise.resolve([]);
+
+        if (isManager) {
+          usersPromise = this.userModel
+            .find({
+              isActive: { $ne: false },
+              $or: [
+                ...(userTeamObjId ? [{ teamId: userTeamObjId }] : []),
+                ...(userObjId ? [{ _id: userObjId }] : []),
+              ],
+            })
+            .select('_id firstName lastName email role teamId reportsTo isActive')
+            .lean();
+        } else if (isTeamLeader) {
+          usersPromise = this.userModel
+            .find({
+              isActive: { $ne: false },
+              $or: [
+                ...(userObjId ? [{ reportsTo: userObjId }] : []),
+                ...(userTeamObjId ? [{ teamId: userTeamObjId }] : []),
+                ...(userObjId ? [{ _id: userObjId }] : []),
+              ],
+            })
+            .select('_id firstName lastName email role teamId reportsTo isActive')
+            .lean();
+        } else {
+          usersPromise = userObjId
+            ? this.userModel
+                .find({ isActive: { $ne: false }, _id: userObjId })
+                .select('_id firstName lastName email role teamId reportsTo isActive')
+                .lean()
+            : Promise.resolve([]);
+        }
+      }
+
+      // Execute all 3 queries in parallel
+      const [allPages, activeTeams, fetchedUsers] = await Promise.all([
+        pagesPromise,
+        teamsPromise,
+        usersPromise,
+      ]);
+
+      let allUsers = fetchedUsers;
+
+      // If manager or TL has team members from teams that weren't captured by teamId, fetch them
+      if (!isAdmin && (isManager || isTeamLeader)) {
+        const teamMemberIds = activeTeams.flatMap((t: any) =>
+          (t.members || []).map((m: any) => this.toSafeObjectId(m)),
+        ).filter(Boolean);
+
+        if (teamMemberIds.length > 0) {
+          const extraUsers = await this.userModel
+            .find({ _id: { $in: teamMemberIds }, isActive: { $ne: false } })
+            .select('_id firstName lastName email role teamId reportsTo isActive')
+            .lean();
+
+          allUsers = [...allUsers, ...extraUsers];
+        }
+      }
+
       // 2. Build parent -> children map and identify root pages
-      const allPageIds = new Set(allPages.map((p) => p._id.toString()));
+      const allPageIds = new Set(allPages.map((p: any) => p._id.toString()));
       const childrenByParent = new Map<string, any[]>();
       const rootPages: any[] = [];
 
-      allPages.forEach((p) => {
+      allPages.forEach((p: any) => {
         const parentId = p.parentPageId ? p.parentPageId.toString() : null;
         if (parentId && allPageIds.has(parentId)) {
           if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
           childrenByParent.get(parentId)!.push(p);
         } else {
-          // Root page or orphaned page whose parent was deleted
           rootPages.push(p);
         }
       });
@@ -320,93 +435,26 @@ export class NotionPagesService implements OnModuleInit {
         }
       });
 
-      // 4. Fetch Teams and Users
-      let activeTeams: any[] = [];
-      let allUsers: any[] = [];
-
-      if (isAdmin) {
-        activeTeams = await this.teamModel.find({ isActive: { $ne: false } }).lean();
-        allUsers = await this.userModel.find({ isActive: { $ne: false } }).lean();
-      } else {
-        const teamQueryConds: any[] = [];
-        if (userObjId) {
-          teamQueryConds.push({ members: userObjId });
-          teamQueryConds.push({ members: userStr });
-          if (isManager) {
-            teamQueryConds.push({ managerId: userObjId });
-            teamQueryConds.push({ managerId: userStr });
-          }
-        }
-        if (userTeamObjId) {
-          teamQueryConds.push({ _id: userTeamObjId });
-        }
-        if (userTeamStr) {
-          try {
-            teamQueryConds.push({ _id: new Types.ObjectId(userTeamStr) });
-          } catch (_) {}
-        }
-
-        if (teamQueryConds.length > 0) {
-          activeTeams = await this.teamModel
-            .find({ isActive: { $ne: false }, $or: teamQueryConds })
-            .lean();
-        }
-
-        const activeTeamObjIds = activeTeams.map((t) => this.toSafeObjectId(t._id)).filter(Boolean);
-        const memberIdsFromTeams = activeTeams.flatMap((t) =>
-          (t.members || []).map((m: any) => this.toSafeObjectId(m)),
-        ).filter(Boolean);
-
-        if (isManager) {
-          allUsers = await this.userModel
-            .find({
-              isActive: { $ne: false },
-              $or: [
-                ...(activeTeamObjIds.length > 0 ? [{ teamId: { $in: activeTeamObjIds } }] : []),
-                ...(userObjId ? [{ _id: userObjId }] : []),
-                ...(memberIdsFromTeams.length > 0 ? [{ _id: { $in: memberIdsFromTeams } }] : []),
-              ],
-            })
-            .lean();
-        } else if (isTeamLeader) {
-          allUsers = await this.userModel
-            .find({
-              isActive: { $ne: false },
-              $or: [
-                ...(userObjId ? [{ reportsTo: userObjId }] : []),
-                ...(activeTeamObjIds.length > 0 ? [{ teamId: { $in: activeTeamObjIds } }] : []),
-                ...(userObjId ? [{ _id: userObjId }] : []),
-                ...(memberIdsFromTeams.length > 0 ? [{ _id: { $in: memberIdsFromTeams } }] : []),
-              ],
-            })
-            .lean();
-        } else {
-          allUsers = userObjId
-            ? await this.userModel.find({ isActive: { $ne: false }, _id: userObjId }).lean()
-            : [];
-        }
-      }
-
       // Deduplicate users
       const userMap = new Map<string, any>();
-      allUsers.forEach((u) => userMap.set(u._id.toString(), u));
+      allUsers.forEach((u: any) => userMap.set(u._id.toString(), u));
       allUsers = Array.from(userMap.values());
 
       // 5. Build team folder nodes
       const placedPageIds = new Set<string>();
 
-      const teamFolders = activeTeams.map((team) => {
+      const teamFolders = activeTeams.map((team: any) => {
         const teamIdStr = team._id.toString();
         const teamMemberStrIds = (team.members || []).map((m: any) => m.toString());
 
-        const teamMembers = allUsers.filter((u) => {
+        const teamMembers = allUsers.filter((u: any) => {
           const uId = u._id.toString();
           const matchesTeamId = u.teamId?.toString() === teamIdStr;
           const matchesMembers = teamMemberStrIds.includes(uId);
           return matchesTeamId || matchesMembers;
         });
 
-        const memberNodes = teamMembers.map((u) => {
+        const memberNodes = teamMembers.map((u: any) => {
           const userIdStr = u._id.toString();
           const roleLabel =
             u.role === 'MANAGER'
@@ -484,14 +532,18 @@ export class NotionPagesService implements OnModuleInit {
           (isAdmin || p.createdBy?.toString() === userStr || p.assignedMemberId?.toString() === userStr),
       );
 
-      return {
+      const result = {
         shared: [...teamFolders, ...extraSharedPages],
         private: privatePages,
         workspace: workspacePages,
       };
+
+      // Store in in-memory cache for subsequent instant loads
+      this.treeCacheMap.set(cacheKey, { data: result, timestamp: Date.now() });
+
+      return result;
     } catch (err) {
       console.error('[getTree] Error generating page tree:', err);
-      // Failsafe fallback: return simple flat tree so UI never breaks
       const fallbackPages = await this.pageModel
         .find({ isDeleted: { $ne: true } })
         .select('title pageType section assignedMemberId teamId')
@@ -653,7 +705,7 @@ export class NotionPagesService implements OnModuleInit {
         .find({
           assignedMemberId: this.toSafeObjectId(userId) as any,
           parentPageId: null,
-          isDeleted: false,
+          isDeleted: { $ne: true },
         })
         .select('-rows -content')
         .lean();
@@ -702,7 +754,7 @@ export class NotionPagesService implements OnModuleInit {
       throw new ForbiddenException('You do not have access to this page');
 
     const children = await this.pageModel
-      .find({ parentPageId: this.toSafeObjectId(id) as any, isDeleted: false })
+      .find({ parentPageId: this.toSafeObjectId(id) as any, isDeleted: { $ne: true } })
       .select('-rows -content')
       .lean();
     return {
@@ -842,7 +894,7 @@ export class NotionPagesService implements OnModuleInit {
       }
     }
 
-    this.invalidateRemarksCache();
+    this.invalidateCache();
     return updatedPage;
   }
 
@@ -870,6 +922,7 @@ export class NotionPagesService implements OnModuleInit {
       deletedBy: user._id || user.id,
       deletedAt: new Date(),
     });
+    this.invalidateCache();
     return { success: true };
   }
 
@@ -978,6 +1031,7 @@ export class NotionPagesService implements OnModuleInit {
       $set: { isDeleted: false },
       $unset: { deletedBy: 1, deletedAt: 1 },
     });
+    this.invalidateCache();
     return { success: true };
   }
 
@@ -1151,7 +1205,7 @@ export class NotionPagesService implements OnModuleInit {
     const userTeamObjId = this.toSafeObjectId(user?.teamId);
 
     // Build filter based on role so any authenticated staff member can view remarks safely
-    const pageFilter: any = { isDeleted: false, pageType: 'SHEET' };
+    const pageFilter: any = { isDeleted: { $ne: true }, pageType: 'SHEET' };
 
     if (!isAdmin) {
       if (isManager && (userObjId || userTeamObjId)) {
@@ -1445,7 +1499,7 @@ export class NotionPagesService implements OnModuleInit {
           .lean(),
         // NO rows field — only metadata
         this.pageModel
-          .find({ isDeleted: false, pageType: 'SHEET' })
+          .find({ isDeleted: { $ne: true }, pageType: 'SHEET' })
           .select('title teamId assignedMemberId columns createdAt')
           .lean(),
       ]);
@@ -1587,7 +1641,7 @@ export class NotionPagesService implements OnModuleInit {
       // Sheets belonging strictly to this group:
       // Manager can see all teamId sheets, but Team Leader only sees sheets of their direct reports + self
       const queryCond: any = {
-        isDeleted: false,
+        isDeleted: { $ne: true },
         pageType: 'SHEET',
         $or: [
           ...(role === 'MANAGER' && teamId ? [{ teamId }] : []),
@@ -1666,7 +1720,7 @@ export class NotionPagesService implements OnModuleInit {
     // Default: Employee / Sourcer / Channel Partner
     const mySheets = await this.pageModel
       .find({
-        isDeleted: false,
+        isDeleted: { $ne: true },
         pageType: 'SHEET',
         $or: [
           { assignedMemberId: user._id },
