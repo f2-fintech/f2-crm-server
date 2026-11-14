@@ -258,7 +258,14 @@ export class NotionPagesService implements OnModuleInit {
     const userTeamStr = user?.teamId ? user.teamId.toString() : '';
 
     const pages = await this.pageModel
-      .find({ isDeleted: false, parentPageId: null })
+      .find({
+        isDeleted: { $ne: true },
+        $or: [
+          { parentPageId: null },
+          { parentPageId: { $exists: false } },
+          { parentPageId: '' as any },
+        ],
+      })
       .select('-rows -content')
       .lean();
 
@@ -408,12 +415,34 @@ export class NotionPagesService implements OnModuleInit {
       };
     });
 
+    // Collect all page IDs placed in teams or user nodes
+    const placedPageIds = new Set<string>();
+    teamFolders.forEach((tf) => {
+      (tf.children || []).forEach((child: any) => {
+        if (child.children && Array.isArray(child.children)) {
+          child.children.forEach((p: any) => {
+            if (p._id) placedPageIds.add(p._id.toString());
+          });
+        }
+        if (child._id && !child._id.toString().startsWith('user_')) {
+          placedPageIds.add(child._id.toString());
+        }
+      });
+    });
+
+    // Standalone pages: Any non-private page not placed inside a team
+    const standalonePages = pages.filter(
+      (p) =>
+        p.section !== 'PRIVATE' &&
+        !placedPageIds.has(p._id.toString()),
+    );
+
     return {
-      shared: teamFolders,
+      shared: [...teamFolders, ...standalonePages],
       private: pages.filter(
         (p) =>
           p.section === 'PRIVATE' &&
-          p.createdBy?.toString() === userStr,
+          (p.createdBy?.toString() === userStr || isAdmin),
       ),
       workspace: pages.filter(
         (p) =>
