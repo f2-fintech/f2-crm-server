@@ -1247,130 +1247,123 @@ export class NotionPagesService implements OnModuleInit {
     } else {
       // ---- PERFORMANCE FIX: Fetch pages WITHOUT rows first (rows can be huge) ----
       // We use aggregation to process rows on the DB side, never loading full rows into Node.js RAM
-      const REMARK_KEYWORDS = ['remark', 'feedback', 'comment', 'note', 'disposition'];
+      const REMARK_KEYWORDS = ['remark', 'feedback', 'comment', 'note'];
 
       const pages = await this.pageModel
         .find(pageFilter)
-        .select('title columns createdAt teamId assignedMemberId')
+        .select('title columns rows createdAt teamId assignedMemberId')
         .populate('teamId', 'name')
         .populate('assignedMemberId', 'firstName lastName')
         .lean();
 
-      // Build result with per-page row stats using a lightweight aggregation
-      result = await Promise.all(
-        (pages || []).map(async (page: any) => {
-          if (!page) return null;
-          const teamObj: any = page.teamId;
-          const memberObj: any = page.assignedMemberId;
-          const teamName = teamObj?.name || 'Unassigned';
-          const assignedTo = memberObj
-            ? `${memberObj.firstName || ''} ${memberObj.lastName || ''}`.trim() || 'Unassigned'
-            : 'Unassigned';
+      result = (pages || []).map((page: any) => {
+        if (!page) return null;
+        const teamObj: any = page.teamId;
+        const memberObj: any = page.assignedMemberId;
+        const teamName = teamObj?.name || 'Unassigned';
+        const assignedTo = memberObj
+          ? `${memberObj.firstName || ''} ${memberObj.lastName || ''}`.trim() || 'Unassigned'
+          : 'Unassigned';
 
-          // Build column key → name map
-          const colMap: Record<string, string> = {};
-          if (Array.isArray(page.columns)) {
-            page.columns.forEach((col: any) => {
-              if (col && col.key) colMap[col.key] = col.name || col.key;
-            });
+        // Build column key → name map
+        const colMap: Record<string, string> = {};
+        if (Array.isArray(page.columns)) {
+          page.columns.forEach((col: any) => {
+            if (col && col.key) colMap[col.key] = col.name || col.key;
+          });
+        }
+
+        // Identify remark column keys from column definitions (excluding disposition)
+        const remarkKeys = Object.entries(colMap)
+          .filter(([, name]) => {
+            const n = String(name || '').toLowerCase();
+            return REMARK_KEYWORDS.some((kw) => n.includes(kw)) && !n.includes('disposition');
+          })
+          .map(([key]) => key);
+
+        // Also add raw keys that look like remarks
+        Object.keys(colMap).forEach((k) => {
+          const kl = k.toLowerCase();
+          if (REMARK_KEYWORDS.some((kw) => kl.includes(kw)) && !kl.includes('disposition') && !remarkKeys.includes(k)) {
+            remarkKeys.push(k);
           }
+        });
+        if (!remarkKeys.includes('feedback_notes')) remarkKeys.push('feedback_notes');
 
-          // Identify remark column keys from column definitions
-          const remarkKeys = Object.entries(colMap)
-            .filter(([, name]) => {
-              const n = String(name || '').toLowerCase();
-              return REMARK_KEYWORDS.some((kw) => n.includes(kw));
-            })
-            .map(([key]) => key);
+        // Robust in-memory counting (guaranteed accurate totalRows, remarksFilled, remarksEmpty)
+        const safeRows = Array.isArray(page.rows) ? page.rows : [];
+        const totalRows = safeRows.length;
+        let remarksFilled = 0;
+        let remarksEmpty = 0;
 
-          // Also add raw keys that look like remarks (from column names themselves)
-          Object.keys(colMap).forEach((k) => {
-            const kl = k.toLowerCase();
-            if (REMARK_KEYWORDS.some((kw) => kl.includes(kw)) && !remarkKeys.includes(k)) {
-              remarkKeys.push(k);
+        safeRows.forEach((row: any) => {
+          if (!row || typeof row !== 'object') return;
+          const hasDisp = row.disposition && String(row.disposition).trim() !== '';
+          const hasNotes = row.feedback_notes && String(row.feedback_notes).trim() !== '';
+          const hasCustomRemark = remarkKeys.some(
+            (k) => k !== 'feedback_notes' && row[k] && String(row[k]).trim() !== '',
+          );
+
+          if (hasDisp || hasNotes || hasCustomRemark) {
+            remarksFilled++;
+          } else {
+            remarksEmpty++;
+          }
+        });
+
+        // Prioritize worked rows (disposition / notes) followed by blank rows (up to 100 preview rows)
+        const workedRows: any[] = [];
+        const unworkedRows: any[] = [];
+        safeRows.forEach((row: any) => {
+          if (!row || typeof row !== 'object') return;
+          const hasDisp = row.disposition && String(row.disposition).trim() !== '';
+          const hasNotes = row.feedback_notes && String(row.feedback_notes).trim() !== '';
+          const hasCustom = remarkKeys.some(
+            (k) => k !== 'feedback_notes' && row[k] && String(row[k]).trim() !== '',
+          );
+          if (hasDisp || hasNotes || hasCustom) {
+            workedRows.push(row);
+          } else {
+            unworkedRows.push(row);
+          }
+        });
+
+        const previewRows = [...workedRows, ...unworkedRows].slice(0, 100);
+
+        // Map preview rows for sheet table and action hub
+        const mappedRows = previewRows.map((row: any) => {
+          const readable: Record<string, any> = { _rowId: String(row.id || '') };
+          Object.entries(row).forEach(([key, value]) => {
+            if (key === 'id') return;
+            if (key === 'disposition') { readable.disposition = value; return; }
+            if (key === 'feedback_notes') {
+              readable.feedback_notes = value;
+              readable['Remarks'] = value;
+              return;
             }
+            readable[colMap[key] || key] = value;
           });
-          // Always include disposition
-          if (!remarkKeys.includes('disposition')) remarkKeys.push('disposition');
+          if (readable.disposition === undefined) readable.disposition = '';
+          if (readable.feedback_notes === undefined) readable.feedback_notes = '';
+          if (readable['Remarks'] === undefined) readable['Remarks'] = readable.feedback_notes || '';
+          return readable;
+        });
 
-          // Aggregation: count totalRows, remarksFilled, remarksEmpty for this page
-          // Fetch only rows that have at least one remark field set (limit 50)
-          const pageObjId = this.toSafeObjectId(page._id);
-          const agg = await this.pageModel.aggregate([
-            { $match: { _id: pageObjId } },
-            { $project: { rows: 1 } },
-            { $unwind: { path: '$rows', preserveNullAndEmptyArrays: false } },
-            {
-              $addFields: {
-                hasRemark: {
-                  $or: remarkKeys.map((k) => ({
-                    $and: [
-                      { $ne: [`$rows.${k}`, null] },
-                      { $ne: [`$rows.${k}`, ''] },
-                      { $ne: [`$rows.${k}`, undefined] },
-                    ],
-                  })),
-                },
-              },
-            },
-            {
-              $group: {
-                _id: null,
-                totalRows: { $sum: 1 },
-                remarksFilled: { $sum: { $cond: ['$hasRemark', 1, 0] } },
-                remarksEmpty: { $sum: { $cond: ['$hasRemark', 0, 1] } },
-                // Collect only rows with remarks, limit 50
-                remarkRows: {
-                  $push: {
-                    $cond: [
-                      '$hasRemark',
-                      '$rows',
-                      '$$REMOVE',
-                    ],
-                  },
-                },
-              },
-            },
-            {
-              $project: {
-                totalRows: 1,
-                remarksFilled: 1,
-                remarksEmpty: 1,
-                remarkRows: { $slice: ['$remarkRows', -50] },
-              },
-            },
-          ]).exec().catch(() => []);
-
-          const stats = agg[0] || { totalRows: 0, remarksFilled: 0, remarksEmpty: 0, remarkRows: [] };
-
-          // Map remark rows to human-readable objects
-          const mappedRows = (stats.remarkRows || []).map((row: any) => {
-            const readable: Record<string, any> = { _rowId: String(row.id || '') };
-            Object.entries(row).forEach(([key, value]) => {
-              if (key === 'id') return;
-              if (key === 'disposition') { readable.disposition = value; return; }
-              if (key === 'feedback_notes') { readable.feedback_notes = value; return; }
-              readable[colMap[key] || key] = value;
-            });
-            return readable;
-          });
-
-          return {
-            _id: page._id ? page._id.toString() : String(page._id),
-            title: page.title || 'Untitled Sheet',
-            teamName,
-            assignedTo,
-            createdAt: page.createdAt,
-            columns: Array.isArray(page.columns) ? page.columns : [],
-            columnNames: Object.values(colMap),
-            remarkColumnNames: remarkKeys.map((k) => colMap[k] || k),
-            totalRows: stats.totalRows,
-            remarksFilled: stats.remarksFilled,
-            remarksEmpty: stats.remarksEmpty,
-            rows: mappedRows,
-          };
-        }),
-      ).then((arr) => arr.filter(Boolean) as any[]);
+        return {
+          _id: page._id ? page._id.toString() : String(page._id),
+          title: page.title || 'Untitled Sheet',
+          teamName,
+          assignedTo,
+          createdAt: page.createdAt,
+          columns: Array.isArray(page.columns) ? page.columns : [],
+          columnNames: Object.values(colMap),
+          remarkColumnNames: ['Remarks', 'feedback_notes', ...remarkKeys.map((k) => colMap[k] || k)],
+          totalRows,
+          remarksFilled,
+          remarksEmpty,
+          rows: mappedRows,
+        };
+      }).filter(Boolean) as any[];
 
       this.remarksCacheMap.set(cacheKey, { data: result, timestamp: Date.now() });
     }
