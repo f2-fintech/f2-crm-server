@@ -2108,6 +2108,7 @@ export class DriveAllocationService {
           performedBy: currentUser?.email || currentUser?.name || 'Admin',
           performedById: updaterId,
           remarks: remarks || '',
+          headers: cached.headers || [],
           recordsSummary: targetRecords.map((r) => ({
             rowIndex: r.rowIndex,
             customerName: r.customerName,
@@ -2115,6 +2116,7 @@ export class DriveAllocationService {
             branch: r.branch,
             state: r.state,
             eligibilityAmount: r.eligibilityAmount,
+            rawData: r.rawData || {},
           })),
         });
       } catch (logErr: any) {
@@ -2186,6 +2188,20 @@ export class DriveAllocationService {
         affectedFileIds.add(alloc.sourceFileId);
         if (alloc.notionPageId) {
           affectedPageIds.add(alloc.notionPageId.toString());
+        } else if (alloc.assignedEmployeeId) {
+          try {
+            const fallbackPages = await this.notionPageModel
+              .find({
+                assignedMemberId: alloc.assignedEmployeeId as any,
+                isDeleted: false,
+                'rows.driveRecordId': { $in: Array.from(driveRecordIdsToPull) },
+              })
+              .select('_id')
+              .lean();
+            for (const fp of fallbackPages) {
+              affectedPageIds.add(fp._id.toString());
+            }
+          } catch {}
         }
 
         // Fetch user's calling remarks and dispositions from Notion before clearing
@@ -2226,6 +2242,12 @@ export class DriveAllocationService {
 
         // Record permanent audit log for this return with full caller remarks
         try {
+          let sourceHeaders: string[] = [];
+          try {
+            const fileData = await this.getFileCachedData(alloc.sourceFileId);
+            sourceHeaders = fileData?.headers || [];
+          } catch {}
+
           await this.driveAllocationLogModel.create({
             action: AllocationActionType.RETURNED,
             sourceFileId: alloc.sourceFileId,
@@ -2241,6 +2263,7 @@ export class DriveAllocationService {
             performedById: currentUser?._id,
             remarks: reason || 'Returned to source file',
             dispositionSummary: dispSummary,
+            headers: sourceHeaders,
             recordsSummary: (alloc.records || [])
               .filter((r) => removedRowIndices.includes(r.rowIndex))
               .map((r) => {
@@ -2255,6 +2278,7 @@ export class DriveAllocationService {
                   eligibilityAmount: r.eligibilityAmount,
                   disposition: info?.disposition || '',
                   remarks: info?.remark || '',
+                  rawData: r.rawData || {},
                 };
               }),
           });
@@ -2301,6 +2325,18 @@ export class DriveAllocationService {
             } as any,
           },
         );
+
+        // If all rows were returned and sheet is now empty, mark sheet as deleted
+        const checkPage = await this.notionPageModel
+          .findById(pageId)
+          .select('rows')
+          .lean();
+        if (checkPage && (!checkPage.rows || checkPage.rows.length === 0)) {
+          await this.notionPageModel.updateOne(
+            { _id: new Types.ObjectId(pageId) },
+            { $set: { isDeleted: true } },
+          );
+        }
       } catch (err: any) {
         this.logger.warn(
           `Failed to clean Notion page ${pageId}: ${err.message}`,
@@ -2383,9 +2419,17 @@ export class DriveAllocationService {
     let sourceFileId = '';
     let sourceFileName = '';
     let folderPath = '';
+    let prevEmployeeId: any = null;
+    let prevEmployeeName = '';
+    let prevManagerId: any = null;
+    let prevManagerName = '';
+    const affectedOldPageIds = new Set<string>();
+    const oldVirtualIdsToPull = new Set<string>();
 
     for (const alloc of allocations) {
       const remaining: any[] = [];
+      const movedFromThisAlloc: any[] = [];
+
       for (const rec of alloc.records || []) {
         const fullVirtualId = `${alloc._id}_${rec.rowIndex}`;
         if (
@@ -2395,15 +2439,25 @@ export class DriveAllocationService {
         ) {
           reassignedCount++;
           recordsToMove.push(rec);
+          movedFromThisAlloc.push(rec);
+          oldVirtualIdsToPull.add(fullVirtualId);
           sourceFileId = alloc.sourceFileId;
           sourceFileName = alloc.sourceFileName;
           folderPath = alloc.folderPath;
+          prevEmployeeId = alloc.assignedEmployeeId;
+          prevEmployeeName = alloc.assignedEmployeeName || '';
+          prevManagerId = alloc.assignedManagerId;
+          prevManagerName = alloc.assignedManagerName || '';
         } else {
           remaining.push(rec);
         }
       }
 
-      if (recordsToMove.length > 0) {
+      if (movedFromThisAlloc.length > 0) {
+        if (alloc.notionPageId) {
+          affectedOldPageIds.add(alloc.notionPageId.toString());
+        }
+
         if (remaining.length === 0) {
           await this.driveRecordModel.deleteOne({ _id: alloc._id });
         } else {
@@ -2420,9 +2474,85 @@ export class DriveAllocationService {
       }
     }
 
+    // Pull reassigned rows from old employee's Notion sheets
+    for (const pageId of affectedOldPageIds) {
+      try {
+        await this.notionPageModel.updateOne(
+          { _id: new Types.ObjectId(pageId) },
+          {
+            $pull: {
+              rows: { driveRecordId: { $in: Array.from(oldVirtualIdsToPull) } },
+            } as any,
+          },
+        );
+      } catch (err: any) {
+        this.logger.warn(
+          `Failed to pull reassigned rows from Notion page ${pageId}: ${err.message}`,
+        );
+      }
+    }
+
     if (recordsToMove.length > 0) {
-      // Create a new allocation document for the new employee!
-      await this.driveRecordModel.create({
+      // 1. Get cached file headers or determine default columns
+      let sourceHeaders: string[] = [];
+      try {
+        const fileData = await this.getFileCachedData(sourceFileId);
+        sourceHeaders = fileData?.headers || [];
+      } catch {}
+
+      const rawKeys =
+        sourceHeaders.length > 0
+          ? sourceHeaders
+          : recordsToMove[0].rawData
+          ? Object.keys(recordsToMove[0].rawData)
+          : [];
+
+      let defaultColumns: Array<{ key: string; name: string; type: string }> = [];
+      if (rawKeys.length > 0) {
+        defaultColumns = rawKeys.map((k, i) => ({
+          key: `col_${i}`,
+          name: k,
+          type: 'text',
+        }));
+      } else {
+        defaultColumns = [
+          { key: 'col_0', name: 'Customer Name', type: 'text' },
+          { key: 'col_1', name: 'Phone', type: 'text' },
+          { key: 'col_2', name: 'Branch', type: 'text' },
+          { key: 'col_3', name: 'Eligibility Amount', type: 'text' },
+          { key: 'col_4', name: 'State', type: 'text' },
+        ];
+      }
+
+      // 2. Find or create target Notion Sheet for the new employee
+      const dateStr = now.toLocaleDateString('en-GB').replace(/\//g, '-');
+      const computedTitle = `${sourceFileName} - ${dateStr}`;
+
+      let targetPage = await this.notionPageModel.findOne({
+        assignedMemberId: employee._id as any,
+        title: computedTitle,
+        isDeleted: false,
+      });
+
+      if (!targetPage) {
+        targetPage = await this.notionPageModel.create({
+          title: computedTitle,
+          icon: '📄',
+          pageType: 'SHEET',
+          section: 'SHARED',
+          columns: defaultColumns,
+          rows: [],
+          teamId: (employee.teamId || manager.teamId || null) as any,
+          createdBy: (currentUser?._id || manager._id) as any,
+          parentPageId: null as any,
+          sharedWith: [employee._id as any],
+          assignedMemberId: employee._id as any,
+          isDeleted: false,
+        });
+      }
+
+      // 3. Create a new allocation document in MongoDB for the new employee
+      const newAllocationDoc = await this.driveRecordModel.create({
         sourceFileId,
         sourceFileName,
         folderPath,
@@ -2431,6 +2561,8 @@ export class DriveAllocationService {
         assignedManagerName: managerName,
         assignedEmployeeId: employee._id,
         assignedEmployeeName: employeeName,
+        notionPageId: targetPage._id,
+        notionPageTitle: targetPage.title,
         allocatedCount: recordsToMove.length,
         allocatedAt: now,
         allocatedBy: currentUser?._id,
@@ -2445,12 +2577,90 @@ export class DriveAllocationService {
             employeeName,
             performedBy: currentUser?.email || 'Admin',
             timestamp: now,
-            notes: remarks || `Reassigned ${recordsToMove.length} records`,
+            notes:
+              remarks ||
+              `Reassigned ${recordsToMove.length} records from ${prevEmployeeName || 'Previous Employee'}`,
           },
         ],
       });
 
-      // Record permanent audit log for this reassign
+      // 4. Build and push new rows into the new employee's Notion Sheet
+      const pageColumns =
+        targetPage.columns && targetPage.columns.length > 0
+          ? targetPage.columns
+          : defaultColumns;
+      const baseRowIndex = Array.isArray(targetPage.rows)
+        ? targetPage.rows.length
+        : 0;
+
+      const newRows = recordsToMove.map((rec, idx) => {
+        const rowId = `row_${Date.now()}_${baseRowIndex + idx}_${Math.floor(Math.random() * 1000)}`;
+        const rowObj: Record<string, any> = {
+          id: rowId,
+          driveRecordId: `${newAllocationDoc._id}_${rec.rowIndex}`,
+          disposition: '',
+          feedback_notes: remarks || '',
+        };
+
+        pageColumns.forEach((col: any) => {
+          const matchingKey = rawKeys.find(
+            (k) => k.toLowerCase() === col.name.toLowerCase(),
+          );
+          if (matchingKey && rec.rawData?.[matchingKey] !== undefined) {
+            rowObj[col.key] = String(rec.rawData[matchingKey]);
+          } else if (col.name.toLowerCase().includes('name')) {
+            rowObj[col.key] = rec.customerName || '';
+          } else if (
+            col.name.toLowerCase().includes('phone') ||
+            col.name.toLowerCase().includes('mobile')
+          ) {
+            rowObj[col.key] = rec.phone || '';
+          } else if (
+            col.name.toLowerCase().includes('branch') ||
+            col.name.toLowerCase().includes('city')
+          ) {
+            rowObj[col.key] = rec.branch || '';
+          } else if (
+            col.name.toLowerCase().includes('amount') ||
+            col.name.toLowerCase().includes('eligibility')
+          ) {
+            rowObj[col.key] = rec.eligibilityAmount
+              ? String(rec.eligibilityAmount)
+              : '';
+          } else if (col.name.toLowerCase().includes('state')) {
+            rowObj[col.key] = rec.state || '';
+          } else {
+            rowObj[col.key] = rec.rawData?.[col.name] ?? '';
+          }
+        });
+
+        return rowObj;
+      });
+
+      await this.notionPageModel.findByIdAndUpdate(targetPage._id, {
+        $push: { rows: { $each: newRows } },
+        $set: {
+          columns: pageColumns,
+          updatedAt: now,
+        },
+      });
+
+      // 5. Update CRM Leads table so leads are assigned to the new employee
+      const movedPhones = recordsToMove.map((r) => r.phone).filter(Boolean);
+      if (movedPhones.length > 0) {
+        try {
+          await this.leadModel.updateMany(
+            { phone: { $in: movedPhones } },
+            { $set: { assignedTo: employee._id } },
+          );
+        } catch (err: any) {
+          this.logger.warn(
+            `Failed to update CRM leads assignedTo on reassign: ${err.message}`,
+          );
+        }
+      }
+
+      // 6. Record permanent audit log for this reassign
       try {
         await this.driveAllocationLogModel.create({
           action: AllocationActionType.REASSIGNED,
@@ -2458,13 +2668,19 @@ export class DriveAllocationService {
           sourceFileName,
           folderPath,
           count: recordsToMove.length,
+          fromEmployeeId: prevEmployeeId,
+          fromEmployeeName: prevEmployeeName,
+          fromManagerId: prevManagerId,
+          fromManagerName: prevManagerName,
           toEmployeeId: employee._id,
           toEmployeeName: employeeName,
           toManagerId: manager._id,
           toManagerName: managerName,
+          targetSheetTitle: targetPage.title,
           performedBy: currentUser?.email || currentUser?.name || 'Admin',
           performedById: currentUser?._id,
           remarks: remarks || '',
+          headers: sourceHeaders,
           recordsSummary: recordsToMove.map((r) => ({
             rowIndex: r.rowIndex,
             customerName: r.customerName,
@@ -2472,6 +2688,7 @@ export class DriveAllocationService {
             branch: r.branch,
             state: r.state,
             eligibilityAmount: r.eligibilityAmount,
+            rawData: r.rawData || {},
           })),
         });
       } catch (logErr: any) {
@@ -2598,8 +2815,55 @@ export class DriveAllocationService {
       }
     }
 
+    const enrichedData = await Promise.all(
+      data.map(async (logDoc: any) => {
+        const log = { ...logDoc };
+        try {
+          if (log.sourceFileId) {
+            const cached = await this.getFileCachedData(log.sourceFileId);
+            if (cached) {
+              if (!log.headers || log.headers.length === 0) {
+                log.headers = cached.headers || [];
+              }
+
+              if (log.recordsSummary && log.recordsSummary.length > 0) {
+                const rowMap = new Map<number, any>();
+                const phoneMap = new Map<string, any>();
+                for (const cr of cached.records || []) {
+                  if (cr.rowIndex !== undefined) rowMap.set(cr.rowIndex, cr);
+                  if (cr.cleanPhone) phoneMap.set(cr.cleanPhone, cr);
+                }
+
+                log.recordsSummary = log.recordsSummary.map((rec: any) => {
+                  if (rec.rawData && Object.keys(rec.rawData).length > 0) {
+                    return rec;
+                  }
+                  const cleanP = rec.phone
+                    ? String(rec.phone).replace(/\D/g, '').slice(-10)
+                    : '';
+                  const matched =
+                    (rec.rowIndex !== undefined
+                      ? rowMap.get(rec.rowIndex)
+                      : null) ||
+                    (cleanP ? phoneMap.get(cleanP) : null);
+
+                  return {
+                    ...rec,
+                    rawData: matched?.rawData || rec.rawData || {},
+                  };
+                });
+              }
+            }
+          }
+        } catch {
+          // If cached file data cannot be resolved, preserve existing log properties
+        }
+        return log;
+      }),
+    );
+
     return {
-      data,
+      data: enrichedData,
       total,
       page,
       limit,

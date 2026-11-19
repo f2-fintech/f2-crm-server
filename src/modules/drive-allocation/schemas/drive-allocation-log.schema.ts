@@ -73,6 +73,10 @@ export class DriveAllocationLog {
   @Prop({ type: Object, default: {} })
   dispositionSummary?: Record<string, number>;
 
+  // Source file headers matching the Excel sheet structure
+  @Prop({ type: [String], default: [] })
+  headers?: string[];
+
   // Snapshot of leads involved in this batch action including user calling remarks
   @Prop({ type: [Object], default: [] })
   recordsSummary: Array<{
@@ -84,6 +88,7 @@ export class DriveAllocationLog {
     eligibilityAmount?: number;
     disposition?: string;
     remarks?: string;
+    rawData?: Record<string, any>;
   }>;
 }
 
