@@ -20,6 +20,7 @@ import {
   DriveAllocationLog,
   DriveAllocationLogSchema,
 } from './schemas/drive-allocation-log.schema';
+import { Team, TeamSchema } from '../teams/schemas/team.schema';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import {
       { name: User.name, schema: UserSchema },
       { name: Lead.name, schema: LeadSchema },
       { name: NotionPage.name, schema: NotionPageSchema },
+      { name: Team.name, schema: TeamSchema },
     ]),
   ],
   controllers: [DriveAllocationController],

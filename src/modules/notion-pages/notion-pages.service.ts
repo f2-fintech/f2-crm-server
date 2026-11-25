@@ -451,7 +451,11 @@ export class NotionPagesService implements OnModuleInit {
           const uId = u._id.toString();
           const matchesTeamId = u.teamId?.toString() === teamIdStr;
           const matchesMembers = teamMemberStrIds.includes(uId);
-          return matchesTeamId || matchesMembers;
+          const userPages = pagesByAssignedMember.get(uId) || [];
+          const matchesPageTeam = userPages.some(
+            (p: any) => p.teamId?.toString() === teamIdStr,
+          );
+          return matchesTeamId || matchesMembers || matchesPageTeam;
         });
 
         const memberNodes = teamMembers.map((u: any) => {
@@ -498,7 +502,7 @@ export class NotionPagesService implements OnModuleInit {
       });
 
       // 6. Any unplaced pages that belong to the user or are accessible
-      const extraSharedPages: any[] = [];
+      const unplacedPages: any[] = [];
 
       hydratedRootPages.forEach((p) => {
         if (p.section === 'PRIVATE' || p.section === 'WORKSPACE') return;
@@ -507,19 +511,93 @@ export class NotionPagesService implements OnModuleInit {
 
         if (isAdmin) {
           // Admin sees all remaining shared pages
-          extraSharedPages.push(p);
+          unplacedPages.push(p);
         } else if (userStr) {
           // Non-admin sees their assigned, created, or shared pages
           const isAssigned = p.assignedMemberId?.toString() === userStr;
           const isCreator = p.createdBy?.toString() === userStr;
           const isSharedWith = Array.isArray(p.sharedWith) && p.sharedWith.some((id: any) => id?.toString() === userStr);
           if (isAssigned || isCreator || isSharedWith) {
-            extraSharedPages.push(p);
+            unplacedPages.push(p);
           }
         }
       });
 
-      // 7. Private and Workspace sections
+      // 7. Cleanly organize unplaced / drive allocated pages so the sidebar is never cluttered
+      let extraSharedResult: any[] = [];
+
+      if (isAdmin || isManager) {
+        const unplacedByUser = new Map<string, any[]>();
+        const unplacedStandalone: any[] = [];
+
+        unplacedPages.forEach((p) => {
+          if (p.assignedMemberId) {
+            const uid = p.assignedMemberId.toString();
+            if (!unplacedByUser.has(uid)) unplacedByUser.set(uid, []);
+            unplacedByUser.get(uid)!.push(p);
+          } else {
+            unplacedStandalone.push(p);
+          }
+        });
+
+        // Resolve any missing user info for inactive or former users
+        const missingUserIds = Array.from(unplacedByUser.keys()).filter((uid) => !userMap.has(uid));
+        if (missingUserIds.length > 0) {
+          const missingUsers = await this.userModel
+            .find({ _id: { $in: missingUserIds.map((id) => this.toSafeObjectId(id)).filter(Boolean) } })
+            .select('_id firstName lastName role')
+            .lean();
+          missingUsers.forEach((mu: any) => userMap.set(mu._id.toString(), mu));
+        }
+
+        const individualMemberNodes: any[] = [];
+        unplacedByUser.forEach((pages, uid) => {
+          const u = userMap.get(uid);
+          const roleLabel = u
+            ? u.role === 'MANAGER'
+              ? 'Manager'
+              : ['TEAM_LEADER', 'TL', 'LEADER'].includes(this.normalizeRole(u.role))
+              ? 'TL'
+              : 'Member'
+            : 'Member';
+          const title = u ? `${u.firstName} ${u.lastName} (${roleLabel})` : `User (${uid.slice(-4)})`;
+
+          individualMemberNodes.push({
+            _id: `user_${uid}`,
+            id: `user_${uid}`,
+            title,
+            pageType: 'PAGE',
+            section: 'SHARED',
+            children: pages,
+          });
+        });
+
+        if (individualMemberNodes.length > 0) {
+          extraSharedResult.push({
+            _id: 'folder_individual_allocations',
+            id: 'folder_individual_allocations',
+            title: '📁 Individual Allocations',
+            pageType: 'PAGE',
+            section: 'SHARED',
+            children: individualMemberNodes,
+          });
+        }
+
+        if (unplacedStandalone.length > 0) {
+          extraSharedResult.push({
+            _id: 'folder_drive_allocations',
+            id: 'folder_drive_allocations',
+            title: '📁 Drive Allocated Sheets',
+            pageType: 'PAGE',
+            section: 'SHARED',
+            children: unplacedStandalone,
+          });
+        }
+      } else {
+        extraSharedResult = unplacedPages;
+      }
+
+      // 8. Private and Workspace sections
       const privatePages = hydratedRootPages.filter(
         (p) =>
           p.section === 'PRIVATE' &&
@@ -533,7 +611,7 @@ export class NotionPagesService implements OnModuleInit {
       );
 
       const result = {
-        shared: [...teamFolders, ...extraSharedPages],
+        shared: [...teamFolders, ...extraSharedResult],
         private: privatePages,
         workspace: workspacePages,
       };
@@ -656,6 +734,32 @@ export class NotionPagesService implements OnModuleInit {
   async getPageById(id: string, user: any) {
     const rawRole = this.normalizeRole(user?.role);
     const userStr = user?._id ? user._id.toString() : '';
+
+    if (id === 'folder_individual_allocations') {
+      return {
+        _id: id,
+        id: id,
+        title: '📁 Individual Allocations',
+        pageType: 'PAGE',
+        section: 'SHARED',
+        rows: [],
+        columns: [],
+        children: [],
+      };
+    }
+
+    if (id === 'folder_drive_allocations') {
+      return {
+        _id: id,
+        id: id,
+        title: '📁 Drive Allocated Sheets',
+        pageType: 'PAGE',
+        section: 'SHARED',
+        rows: [],
+        columns: [],
+        children: [],
+      };
+    }
 
     if (id.startsWith('user_')) {
       const userId = id.replace('user_', '');
