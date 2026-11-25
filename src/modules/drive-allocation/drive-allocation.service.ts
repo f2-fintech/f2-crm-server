@@ -30,6 +30,7 @@ import {
   DriveAllocationLogDocument,
   AllocationActionType,
 } from './schemas/drive-allocation-log.schema';
+import { Team, TeamDocument } from '../teams/schemas/team.schema';
 import { AllocateRecordsDto, PreviewRecordsDto } from './dto/allocate-records.dto';
 import { ReassignRecordsDto, ReturnRecordsDto } from './dto/drive-actions.dto';
 
@@ -100,6 +101,8 @@ export class DriveAllocationService {
     private readonly notionPageModel: Model<NotionPageDocument>,
     @InjectModel(DriveAllocationLog.name)
     private readonly driveAllocationLogModel: Model<DriveAllocationLogDocument>,
+    @InjectModel(Team.name)
+    private readonly teamModel: Model<TeamDocument>,
   ) {
     if (!fs.existsSync(this.cacheDir)) {
       try {
@@ -111,11 +114,20 @@ export class DriveAllocationService {
   }
 
   /**
-   * Helper to count total allocated leads for a file across all batch allocation documents
+   * Helper to count total active allocated leads for a file within the 7-day calling window.
+   * Leads allocated more than 7 days ago automatically return to the available pool.
    */
   async getAllocatedCount(fileId: string): Promise<number> {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const allocations = await this.driveRecordModel
-      .find({ sourceFileId: fileId, status: RecordAllocationStatus.ALLOCATED })
+      .find({
+        sourceFileId: fileId,
+        status: RecordAllocationStatus.ALLOCATED,
+        $or: [
+          { allocatedAt: { $gte: sevenDaysAgo } },
+          { allocatedAt: null, createdAt: { $gte: sevenDaysAgo } },
+        ],
+      })
       .select('allocatedCount records')
       .lean();
     return allocations.reduce(
@@ -125,16 +137,32 @@ export class DriveAllocationService {
   }
 
   /**
-   * Helper to get sets of allocated row indices and phone numbers for a file
+   * Helper to get sets of allocated row indices and phone numbers for a file.
+   *
+   * 7-Day Lock Window Rule:
+   * 1. During 7 days (1 week): Any allocation is active and locked (cannot be allocated to anyone).
+   * 2. After 7 days (1 week): The lock expires, data returns to the available pool, and CAN be
+   *    re-allocated to employees (including the same employee).
+   * 3. Original employee's Notion sheet and CRM leads remain 100% safe and untouched.
    */
   async getAllocatedIndices(fileId: string): Promise<{
     allocatedRowIndices: Set<number>;
     allocatedPhones: Set<string>;
   }> {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
     const allocations = await this.driveRecordModel
-      .find({ sourceFileId: fileId, status: RecordAllocationStatus.ALLOCATED })
+      .find({
+        sourceFileId: fileId,
+        status: RecordAllocationStatus.ALLOCATED,
+        $or: [
+          { allocatedAt: { $gte: sevenDaysAgo } },
+          { allocatedAt: null, createdAt: { $gte: sevenDaysAgo } },
+        ],
+      })
       .select('records')
       .lean();
+
     const allocatedRowIndices = new Set<number>();
     const allocatedPhones = new Set<string>();
     for (const a of allocations) {
@@ -1454,8 +1482,21 @@ export class DriveAllocationService {
       }
     }
 
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    const nowMs = Date.now();
     const flattened: any[] = [];
     for (const a of allocations) {
+      const allocDate = a.allocatedAt
+        ? new Date(a.allocatedAt)
+        : (a as any).createdAt
+        ? new Date((a as any).createdAt)
+        : new Date();
+      const ageMs = nowMs - allocDate.getTime();
+      const isLockActive = ageMs < sevenDaysMs;
+      const daysRemaining = isLockActive
+        ? Math.max(1, Math.ceil((sevenDaysMs - ageMs) / (24 * 60 * 60 * 1000)))
+        : 0;
+
       for (const r of a.records || []) {
         const callingInfo = notionRowMap.get(`${a._id}_${r.rowIndex}`);
         flattened.push({
@@ -1482,6 +1523,11 @@ export class DriveAllocationService {
           disposition: callingInfo?.disposition || '',
           callingRemark: callingInfo?.remark || '',
           status: RecordAllocationStatus.ALLOCATED,
+          isLockActive,
+          daysRemaining,
+          lockStatusLabel: isLockActive
+            ? `Active (${daysRemaining}d left)`
+            : 'Recycled to Pool (>7d)',
         });
       }
     }
@@ -1796,6 +1842,7 @@ export class DriveAllocationService {
       sourceFileId,
       managerId,
       employeeId,
+      employeeIds,
       recordIds,
       count,
       remarks,
@@ -1803,16 +1850,37 @@ export class DriveAllocationService {
       targetPageId,
     } = dto;
 
-    const [manager, employee] = await Promise.all([
-      this.userModel.findById(managerId),
-      this.userModel.findById(employeeId),
-    ]);
+    const targetEmployeeIds: string[] =
+      employeeIds && employeeIds.length > 0
+        ? Array.from(new Set(employeeIds.map((id) => id?.toString()).filter(Boolean)))
+        : employeeId
+        ? [employeeId.toString()]
+        : [];
 
+    if (targetEmployeeIds.length === 0) {
+      throw new BadRequestException('Kam se kam ek employee select kijiye allocation ke liye!');
+    }
+
+    const manager = await this.userModel.findById(managerId);
     if (!manager) throw new NotFoundException('Selected manager not found');
-    if (!employee) throw new NotFoundException('Selected employee not found');
-
     const managerName = `${manager.firstName} ${manager.lastName}`.trim();
-    const employeeName = `${employee.firstName} ${employee.lastName}`.trim();
+
+    const targetObjIds = targetEmployeeIds
+      .map((id) => (Types.ObjectId.isValid(id) ? new Types.ObjectId(id) : null))
+      .filter((id): id is Types.ObjectId => Boolean(id));
+
+    const employees = await this.userModel
+      .find({ _id: { $in: targetObjIds } })
+      .lean();
+
+    if (!employees || employees.length === 0) {
+      throw new NotFoundException('Selected employee(s) not found');
+    }
+
+    // Preserve order of targetEmployeeIds
+    const orderedEmployees: any[] = targetEmployeeIds
+      .map((id) => employees.find((e: any) => e._id.toString() === id.toString()))
+      .filter((e): e is any => Boolean(e));
 
     // Load cached data for the source file
     const cached = await this.getFileCachedData(sourceFileId);
@@ -1833,6 +1901,7 @@ export class DriveAllocationService {
           (!r.cleanPhone || !allocatedPhones.has(r.cleanPhone)),
       );
     } else if (count && count > 0) {
+      const totalNeeded = count * orderedEmployees.length;
       const seenPhoneSet = new Set<string>();
       const matchingAvailableRecords: CachedRecord[] = [];
 
@@ -1866,7 +1935,7 @@ export class DriveAllocationService {
 
       const { selectedRecords } = this.selectBalancedRecordsByState(
         matchingAvailableRecords,
-        count,
+        totalNeeded,
       );
       targetRecords = selectedRecords;
     } else {
@@ -1889,7 +1958,7 @@ export class DriveAllocationService {
           : currentUser._id
         : manager._id;
 
-      // Setup Notion sheet first
+      // Setup Notion sheet columns
       const rawKeys =
         cached.headers && cached.headers.length > 0
           ? cached.headers
@@ -1897,8 +1966,7 @@ export class DriveAllocationService {
           ? Object.keys(targetRecords[0].rawData)
           : [];
 
-      let defaultColumns: Array<{ key: string; name: string; type: string }> =
-        [];
+      let defaultColumns: Array<{ key: string; name: string; type: string }> = [];
       if (rawKeys.length > 0) {
         defaultColumns = rawKeys.map((k, i) => ({
           key: `col_${i}`,
@@ -1915,165 +1983,254 @@ export class DriveAllocationService {
         ];
       }
 
-      let targetPage: NotionPageDocument | null = null;
-      if (targetPageId) {
-        targetPage = await this.notionPageModel.findOne({
-          _id: new Types.ObjectId(targetPageId) as any,
-          assignedMemberId: employee._id as any,
-          isDeleted: false,
-        });
-      }
-
       const dateStr = now.toLocaleDateString('en-GB').replace(/\//g, '-');
-      const computedTitle =
-        targetSheetName?.trim() ||
-        `${targetRecords[0].sourceFileName} - ${dateStr}`;
+      const allocationResults: any[] = [];
+      let recordOffset = 0;
 
-      if (!targetPage) {
-        targetPage = await this.notionPageModel.findOne({
-          assignedMemberId: employee._id as any,
-          title: computedTitle,
-          isDeleted: false,
-        });
-      }
+      for (let empIdx = 0; empIdx < orderedEmployees.length; empIdx++) {
+        const employee: any = orderedEmployees[empIdx];
+        if (!employee) continue;
+        const employeeName = `${employee.firstName} ${employee.lastName}`.trim();
 
-      if (!targetPage) {
-        targetPage = await this.notionPageModel.create({
-          title: computedTitle,
-          icon: '📄',
-          pageType: 'SHEET',
-          section: 'SHARED',
-          columns: defaultColumns,
-          rows: [],
-          teamId: (employee.teamId || manager.teamId || null) as any,
-          createdBy: (updaterId || manager._id) as any,
-          parentPageId: null as any,
-          sharedWith: [employee._id as any],
-          assignedMemberId: employee._id as any,
-          isDeleted: false,
-        });
-      }
+        const recordsToTake =
+          orderedEmployees.length === 1
+            ? targetRecords.length
+            : Math.min(
+                count || Math.ceil(targetRecords.length / orderedEmployees.length),
+                targetRecords.length - recordOffset,
+              );
 
-      // Insert EXACTLY ONE document in MongoDB Atlas with the records array!
-      const allocationDoc = await this.driveRecordModel.create({
-        sourceFileId,
-        sourceFileName: targetRecords[0].sourceFileName,
-        folderPath: targetRecords[0].folderPath,
-        status: RecordAllocationStatus.ALLOCATED,
-        assignedManagerId: manager._id,
-        assignedManagerName: managerName,
-        assignedEmployeeId: employee._id,
-        assignedEmployeeName: employeeName,
-        notionPageId: targetPage._id,
-        notionPageTitle: targetPage.title,
-        allocatedCount: targetRecords.length,
-        allocatedAt: now,
-        allocatedBy: updaterId,
-        remarks: remarks || '',
-        records: targetRecords.map((rec) => ({
-          id: rec._id,
-          rowIndex: rec.rowIndex,
-          phone: rec.phone,
-          cleanPhone: rec.cleanPhone,
-          customerName: rec.customerName,
-          branch: rec.branch,
-          state: rec.state,
-          eligibilityAmount: rec.eligibilityAmount,
-          rawData: rec.rawData,
-        })),
-        history: [
-          {
-            action: 'ALLOCATED',
-            managerId: manager._id.toString(),
-            managerName,
-            employeeId: employee._id.toString(),
-            employeeName,
-            performedBy: currentUser?.email || 'Admin',
-            timestamp: now,
-            notes: remarks || `Allocated ${targetRecords.length} records to sheet`,
-          },
-        ],
-      });
+        const empTargetRecords = targetRecords.slice(
+          recordOffset,
+          recordOffset + recordsToTake,
+        );
+        recordOffset += recordsToTake;
 
-      const pageColumns =
-        targetPage.columns && targetPage.columns.length > 0
-          ? targetPage.columns
-          : defaultColumns;
-      const baseRowIndex = Array.isArray(targetPage.rows)
-        ? targetPage.rows.length
-        : 0;
+        if (empTargetRecords.length === 0) continue;
 
-      const newRows = targetRecords.map((rec, idx) => {
-        const rowId = `row_${Date.now()}_${baseRowIndex + idx}_${Math.floor(Math.random() * 1000)}`;
-        const rowObj: Record<string, any> = {
-          id: rowId,
-          driveRecordId: `${allocationDoc._id}_${rec.rowIndex}`,
-          disposition: '',
-          feedback_notes: remarks || '',
-        };
+        const computedTitle =
+          orderedEmployees.length === 1
+            ? targetSheetName?.trim() || `${empTargetRecords[0].sourceFileName} - ${dateStr}`
+            : targetSheetName?.trim()
+            ? `${targetSheetName.trim()} - ${employee.firstName}`
+            : `${empTargetRecords[0].sourceFileName} - ${employee.firstName} - ${dateStr}`;
 
-        pageColumns.forEach((col: any) => {
-          const matchingKey = rawKeys.find(
-            (k) => k.toLowerCase() === col.name.toLowerCase(),
-          );
-          if (matchingKey && rec.rawData?.[matchingKey] !== undefined) {
-            rowObj[col.key] = String(rec.rawData[matchingKey]);
-          } else if (col.name.toLowerCase().includes('name')) {
-            rowObj[col.key] = rec.customerName || '';
-          } else if (
-            col.name.toLowerCase().includes('phone') ||
-            col.name.toLowerCase().includes('mobile')
-          ) {
-            rowObj[col.key] = rec.phone || '';
-          } else if (
-            col.name.toLowerCase().includes('branch') ||
-            col.name.toLowerCase().includes('city')
-          ) {
-            rowObj[col.key] = rec.branch || '';
-          } else if (
-            col.name.toLowerCase().includes('amount') ||
-            col.name.toLowerCase().includes('eligibility')
-          ) {
-            rowObj[col.key] = rec.eligibilityAmount
-              ? String(rec.eligibilityAmount)
-              : '';
-          } else if (col.name.toLowerCase().includes('state')) {
-            rowObj[col.key] = rec.state || '';
-          } else {
-            rowObj[col.key] = rec.rawData?.[col.name] ?? '';
-          }
-        });
-
-        return rowObj;
-      });
-
-      // Push new rows to Notion Sheet
-      await this.notionPageModel.findByIdAndUpdate(targetPage._id, {
-        $push: { rows: { $each: newRows } },
-        $set: {
-          columns: pageColumns,
-          updatedAt: now,
-        },
-      });
-
-      // Sync to Leads CRM table for the employee
-      for (let i = 0; i < targetRecords.length; i++) {
-        const rec = targetRecords[i];
-        const leadIdStr = `DRV-${Date.now().toString().slice(-6)}-${i}-${Math.floor(Math.random() * 1000)}`;
-        try {
-          await this.leadModel.create({
-            leadId: leadIdStr,
-            fullName: rec.customerName || 'Drive Lead',
-            phone: rec.phone || '0000000000',
-            city: rec.branch || rec.state || '',
-            loanAmount: rec.eligibilityAmount || 0,
-            status: LeadStatus.NEW,
-            leadSource: `Drive: ${rec.sourceFileName}`,
-            assignedTo: employee._id.toString() as any,
+        let targetPage: NotionPageDocument | null = null;
+        if (orderedEmployees.length === 1 && targetPageId) {
+          targetPage = await this.notionPageModel.findOne({
+            _id: new Types.ObjectId(targetPageId) as any,
+            assignedMemberId: employee._id as any,
+            isDeleted: false,
           });
-        } catch (e: any) {
-          this.logger.debug(`Lead creation note: ${e.message}`);
         }
+
+        if (!targetPage) {
+          targetPage = await this.notionPageModel.findOne({
+            assignedMemberId: employee._id as any,
+            title: computedTitle,
+            isDeleted: false,
+          });
+        }
+
+        if (!targetPage) {
+          let resolvedTeamId = employee.teamId || manager?.teamId || null;
+          if (!resolvedTeamId) {
+            const foundTeam = await this.teamModel
+              .findOne({
+                $or: [
+                  { members: employee._id },
+                  { managerId: employee._id },
+                  { teamLeaderId: employee._id },
+                ],
+                isActive: { $ne: false },
+              })
+              .select('_id')
+              .lean();
+            if (foundTeam) {
+              resolvedTeamId = foundTeam._id;
+              await this.userModel.updateOne(
+                { _id: employee._id, teamId: null },
+                { $set: { teamId: resolvedTeamId } },
+              );
+            }
+          }
+
+          targetPage = await this.notionPageModel.create({
+            title: computedTitle,
+            icon: '📄',
+            pageType: 'SHEET',
+            section: 'SHARED',
+            columns: defaultColumns,
+            rows: [],
+            teamId: (resolvedTeamId || null) as any,
+            createdBy: (updaterId || manager._id) as any,
+            parentPageId: null as any,
+            sharedWith: [employee._id as any],
+            assignedMemberId: employee._id as any,
+            isDeleted: false,
+          });
+        }
+
+        // Insert allocation document in MongoDB Atlas
+        const allocationDoc = await this.driveRecordModel.create({
+          sourceFileId,
+          sourceFileName: empTargetRecords[0].sourceFileName,
+          folderPath: empTargetRecords[0].folderPath,
+          status: RecordAllocationStatus.ALLOCATED,
+          assignedManagerId: manager._id,
+          assignedManagerName: managerName,
+          assignedEmployeeId: employee._id,
+          assignedEmployeeName: employeeName,
+          notionPageId: targetPage._id,
+          notionPageTitle: targetPage.title,
+          allocatedCount: empTargetRecords.length,
+          allocatedAt: now,
+          allocatedBy: updaterId,
+          remarks: remarks || '',
+          records: empTargetRecords.map((rec) => ({
+            id: rec._id,
+            rowIndex: rec.rowIndex,
+            phone: rec.phone,
+            cleanPhone: rec.cleanPhone,
+            customerName: rec.customerName,
+            branch: rec.branch,
+            state: rec.state,
+            eligibilityAmount: rec.eligibilityAmount,
+            rawData: rec.rawData,
+          })),
+          history: [
+            {
+              action: 'ALLOCATED',
+              managerId: manager._id.toString(),
+              managerName,
+              employeeId: employee._id.toString(),
+              employeeName,
+              performedBy: currentUser?.email || 'Admin',
+              timestamp: now,
+              notes: remarks || `Allocated ${empTargetRecords.length} records to sheet`,
+            },
+          ],
+        });
+
+        const pageColumns =
+          targetPage.columns && targetPage.columns.length > 0
+            ? targetPage.columns
+            : defaultColumns;
+        const baseRowIndex = Array.isArray(targetPage.rows)
+          ? targetPage.rows.length
+          : 0;
+
+        const newRows = empTargetRecords.map((rec, idx) => {
+          const rowId = `row_${Date.now()}_${baseRowIndex + idx}_${Math.floor(Math.random() * 1000)}`;
+          const rowObj: Record<string, any> = {
+            id: rowId,
+            driveRecordId: `${allocationDoc._id}_${rec.rowIndex}`,
+            disposition: '',
+            feedback_notes: remarks || '',
+          };
+
+          pageColumns.forEach((col: any) => {
+            const matchingKey = rawKeys.find(
+              (k) => k.toLowerCase() === col.name.toLowerCase(),
+            );
+            if (matchingKey && rec.rawData?.[matchingKey] !== undefined) {
+              rowObj[col.key] = String(rec.rawData[matchingKey]);
+            } else if (col.name.toLowerCase().includes('name')) {
+              rowObj[col.key] = rec.customerName || '';
+            } else if (
+              col.name.toLowerCase().includes('phone') ||
+              col.name.toLowerCase().includes('mobile')
+            ) {
+              rowObj[col.key] = rec.phone || '';
+            } else if (
+              col.name.toLowerCase().includes('branch') ||
+              col.name.toLowerCase().includes('city')
+            ) {
+              rowObj[col.key] = rec.branch || '';
+            } else if (
+              col.name.toLowerCase().includes('amount') ||
+              col.name.toLowerCase().includes('eligibility')
+            ) {
+              rowObj[col.key] = rec.eligibilityAmount
+                ? String(rec.eligibilityAmount)
+                : '';
+            } else if (col.name.toLowerCase().includes('state')) {
+              rowObj[col.key] = rec.state || '';
+            } else {
+              rowObj[col.key] = rec.rawData?.[col.name] ?? '';
+            }
+          });
+
+          return rowObj;
+        });
+
+        // Push new rows to Notion Sheet
+        await this.notionPageModel.findByIdAndUpdate(targetPage._id, {
+          $push: { rows: { $each: newRows } },
+          $set: {
+            columns: pageColumns,
+            updatedAt: now,
+          },
+        });
+
+        // Sync to Leads CRM table for the employee
+        for (let i = 0; i < empTargetRecords.length; i++) {
+          const rec = empTargetRecords[i];
+          const leadIdStr = `DRV-${Date.now().toString().slice(-6)}-${i}-${Math.floor(Math.random() * 1000)}`;
+          try {
+            await this.leadModel.create({
+              leadId: leadIdStr,
+              fullName: rec.customerName || 'Drive Lead',
+              phone: rec.phone || '0000000000',
+              city: rec.branch || rec.state || '',
+              loanAmount: rec.eligibilityAmount || 0,
+              status: LeadStatus.NEW,
+              leadSource: `Drive: ${rec.sourceFileName}`,
+              assignedTo: employee._id.toString() as any,
+            });
+          } catch (e: any) {
+            this.logger.debug(`Lead creation note: ${e.message}`);
+          }
+        }
+
+        // Record audit log
+        try {
+          await this.driveAllocationLogModel.create({
+            action: AllocationActionType.ALLOCATED,
+            sourceFileId,
+            sourceFileName: empTargetRecords[0].sourceFileName,
+            folderPath: empTargetRecords[0].folderPath,
+            count: empTargetRecords.length,
+            toEmployeeId: employee._id,
+            toEmployeeName: employeeName,
+            toManagerId: manager._id,
+            toManagerName: managerName,
+            targetSheetTitle: targetPage.title,
+            performedBy: currentUser?.email || currentUser?.name || 'Admin',
+            performedById: updaterId,
+            remarks: remarks || '',
+            headers: cached.headers || [],
+            recordsSummary: empTargetRecords.map((r) => ({
+              rowIndex: r.rowIndex,
+              customerName: r.customerName,
+              phone: r.phone,
+              branch: r.branch,
+              state: r.state,
+              eligibilityAmount: r.eligibilityAmount,
+              rawData: r.rawData || {},
+            })),
+          });
+        } catch (logErr: any) {
+          this.logger.warn(`Failed to save allocation log: ${logErr.message}`);
+        }
+
+        allocationResults.push({
+          employeeId: employee._id,
+          employeeName,
+          allocatedCount: empTargetRecords.length,
+          sheetTitle: targetPage.title,
+          sheetId: targetPage._id.toString(),
+        });
       }
 
       // Update counts in DriveSource
@@ -2092,44 +2249,22 @@ export class DriveAllocationService {
         },
       );
 
-      // Record permanent audit log for this allocation
-      try {
-        await this.driveAllocationLogModel.create({
-          action: AllocationActionType.ALLOCATED,
-          sourceFileId,
-          sourceFileName: targetRecords[0].sourceFileName,
-          folderPath: targetRecords[0].folderPath,
-          count: targetRecords.length,
-          toEmployeeId: employee._id,
-          toEmployeeName: employeeName,
-          toManagerId: manager._id,
-          toManagerName: managerName,
-          targetSheetTitle: targetPage.title,
-          performedBy: currentUser?.email || currentUser?.name || 'Admin',
-          performedById: updaterId,
-          remarks: remarks || '',
-          headers: cached.headers || [],
-          recordsSummary: targetRecords.map((r) => ({
-            rowIndex: r.rowIndex,
-            customerName: r.customerName,
-            phone: r.phone,
-            branch: r.branch,
-            state: r.state,
-            eligibilityAmount: r.eligibilityAmount,
-            rawData: r.rawData || {},
-          })),
-        });
-      } catch (logErr: any) {
-        this.logger.warn(`Failed to save allocation log: ${logErr.message}`);
-      }
+      const totalAllocated = allocationResults.reduce(
+        (sum, a) => sum + a.allocatedCount,
+        0,
+      );
+      const empNamesList = allocationResults.map((a) => a.employeeName).join(', ');
 
       return {
-        message: `Successfully allocated ${targetRecords.length} records to ${employeeName}'s file "${targetPage.title}" (Manager: ${managerName})`,
-        allocatedCount: targetRecords.length,
+        message:
+          allocationResults.length > 1
+            ? `Successfully allocated ${totalAllocated} records across ${allocationResults.length} employees (${empNamesList})!`
+            : `Successfully allocated ${totalAllocated} records to ${empNamesList}'s file "${allocationResults[0]?.sheetTitle}" (Manager: ${managerName})`,
+        allocatedCount: totalAllocated,
         managerName,
-        employeeName,
-        sheetTitle: targetPage.title,
-        sheetId: targetPage._id.toString(),
+        employeeName: empNamesList,
+        sheetTitle: allocationResults[0]?.sheetTitle || '',
+        sheetId: allocationResults[0]?.sheetId || '',
       };
     } catch (err: any) {
       this.logger.error(`Allocation error: ${err.message}`, err.stack);
@@ -2535,6 +2670,28 @@ export class DriveAllocationService {
       });
 
       if (!targetPage) {
+        let resolvedTeamId = employee.teamId || manager?.teamId || null;
+        if (!resolvedTeamId) {
+          const foundTeam = await this.teamModel
+            .findOne({
+              $or: [
+                { members: employee._id },
+                { managerId: employee._id },
+                { teamLeaderId: employee._id },
+              ],
+              isActive: { $ne: false },
+            })
+            .select('_id')
+            .lean();
+          if (foundTeam) {
+            resolvedTeamId = foundTeam._id;
+            await this.userModel.updateOne(
+              { _id: employee._id, teamId: null },
+              { $set: { teamId: resolvedTeamId } },
+            );
+          }
+        }
+
         targetPage = await this.notionPageModel.create({
           title: computedTitle,
           icon: '📄',
@@ -2542,7 +2699,7 @@ export class DriveAllocationService {
           section: 'SHARED',
           columns: defaultColumns,
           rows: [],
-          teamId: (employee.teamId || manager.teamId || null) as any,
+          teamId: (resolvedTeamId || null) as any,
           createdBy: (currentUser?._id || manager._id) as any,
           parentPageId: null as any,
           sharedWith: [employee._id as any],

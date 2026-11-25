@@ -10,8 +10,12 @@ export class AllocateRecordsDto {
   managerId: string;
 
   @IsString()
-  @IsNotEmpty()
-  employeeId: string;
+  @IsOptional()
+  employeeId?: string;
+
+  @IsArray()
+  @IsOptional()
+  employeeIds?: string[];
 
   @IsArray()
   @IsOptional()
@@ -82,6 +86,10 @@ export class PreviewRecordsDto {
   @IsString()
   @IsNotEmpty()
   sourceFileId: string;
+
+  @IsString()
+  @IsOptional()
+  employeeId?: string;
 
   @IsNumber()
   @IsOptional()
