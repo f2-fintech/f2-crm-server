@@ -1985,26 +1985,86 @@ export class DriveAllocationService {
 
       const dateStr = now.toLocaleDateString('en-GB').replace(/\//g, '-');
       const allocationResults: any[] = [];
-      let recordOffset = 0;
+      const numEmployees = orderedEmployees.length;
 
-      for (let empIdx = 0; empIdx < orderedEmployees.length; empIdx++) {
+      // Base share per employee to guarantee every selected employee receives data
+      const basePerEmployee =
+        numEmployees === 1
+          ? targetRecords.length
+          : Math.floor(targetRecords.length / numEmployees);
+      const remainder =
+        numEmployees === 1 ? 0 : targetRecords.length % numEmployees;
+
+      // Pre-fetch past allocated phone numbers and row indices per employee
+      // Rule: After 7 days, data unlocks and can go to other employees, but should NOT go to the same employee again
+      const employeePastData = new Map<string, { phones: Set<string>; rows: Set<number> }>();
+      for (const emp of orderedEmployees) {
+        const pastDocs = await this.driveRecordModel
+          .find({
+            sourceFileId,
+            assignedEmployeeId: emp._id,
+          })
+          .select('records.cleanPhone records.rowIndex')
+          .lean();
+
+        const phones = new Set<string>();
+        const rows = new Set<number>();
+        for (const doc of pastDocs) {
+          for (const r of doc.records || []) {
+            if (r.cleanPhone) phones.add(r.cleanPhone);
+            if (r.rowIndex) rows.add(r.rowIndex);
+          }
+        }
+        employeePastData.set(emp._id.toString(), { phones, rows });
+      }
+
+      const assignedRecordIds = new Set<string>();
+
+      for (let empIdx = 0; empIdx < numEmployees; empIdx++) {
         const employee: any = orderedEmployees[empIdx];
         if (!employee) continue;
         const employeeName = `${employee.firstName} ${employee.lastName}`.trim();
+        const past = employeePastData.get(employee._id.toString()) || {
+          phones: new Set<string>(),
+          rows: new Set<number>(),
+        };
 
+        // Fair distribution: if requested count fits all, use count; otherwise distribute all available fairly
         const recordsToTake =
-          orderedEmployees.length === 1
+          numEmployees === 1
             ? targetRecords.length
-            : Math.min(
-                count || Math.ceil(targetRecords.length / orderedEmployees.length),
-                targetRecords.length - recordOffset,
-              );
+            : count && count * numEmployees <= targetRecords.length
+            ? count
+            : basePerEmployee + (empIdx < remainder ? 1 : 0);
 
-        const empTargetRecords = targetRecords.slice(
-          recordOffset,
-          recordOffset + recordsToTake,
-        );
-        recordOffset += recordsToTake;
+        // First pick unassigned records that this employee has NEVER worked on before
+        const empTargetRecords: CachedRecord[] = [];
+        const fallbackRecords: CachedRecord[] = [];
+
+        for (const rec of targetRecords) {
+          if (assignedRecordIds.has(rec._id)) continue;
+          const hadBefore =
+            (rec.cleanPhone && past.phones.has(rec.cleanPhone)) ||
+            (rec.rowIndex && past.rows.has(rec.rowIndex));
+
+          if (!hadBefore) {
+            empTargetRecords.push(rec);
+            assignedRecordIds.add(rec._id);
+            if (empTargetRecords.length === recordsToTake) break;
+          } else {
+            fallbackRecords.push(rec);
+          }
+        }
+
+        // If not enough brand-new records for this employee, fill with fallback
+        if (empTargetRecords.length < recordsToTake) {
+          for (const fb of fallbackRecords) {
+            if (assignedRecordIds.has(fb._id)) continue;
+            empTargetRecords.push(fb);
+            assignedRecordIds.add(fb._id);
+            if (empTargetRecords.length === recordsToTake) break;
+          }
+        }
 
         if (empTargetRecords.length === 0) continue;
 
@@ -2065,7 +2125,9 @@ export class DriveAllocationService {
             teamId: (resolvedTeamId || null) as any,
             createdBy: (updaterId || manager._id) as any,
             parentPageId: null as any,
-            sharedWith: [employee._id as any],
+            sharedWith: Array.from(
+              new Set([employee._id?.toString(), manager._id?.toString()].filter(Boolean)),
+            ).map((id) => new Types.ObjectId(id) as any),
             assignedMemberId: employee._id as any,
             isDeleted: false,
           });
