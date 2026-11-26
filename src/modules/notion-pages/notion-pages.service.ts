@@ -60,6 +60,10 @@ export class NotionPagesService implements OnModuleInit {
         { background: true },
       );
       await this.pageModel.collection.createIndex(
+        { isDeleted: 1, pageType: 1, updatedAt: -1 },
+        { background: true },
+      );
+      await this.pageModel.collection.createIndex(
         { assignedMemberId: 1, isDeleted: 1, parentPageId: 1 },
         { background: true },
       );
@@ -1349,24 +1353,92 @@ export class NotionPagesService implements OnModuleInit {
     if (cached && now - cached.timestamp < this.REMARKS_CACHE_TTL) {
       result = cached.data;
     } else {
-      // ---- PERFORMANCE FIX: Fetch pages WITHOUT rows first (rows can be huge) ----
-      // We use aggregation to process rows on the DB side, never loading full rows into Node.js RAM
+      // ---- HIGH PERFORMANCE DB-SIDE AGGREGATION ----
+      // Computes totalRows & remarksFilled on MongoDB engine; slices preview rows
+      // Avoids loading full heavy raw rows across all sheets into Node.js RAM (fixes 30s timeout on live)
       const REMARK_KEYWORDS = ['remark', 'feedback', 'comment', 'note'];
 
-      const pages = await this.pageModel
-        .find(pageFilter)
-        .select('title columns rows createdAt teamId assignedMemberId')
-        .populate('teamId', 'name')
-        .populate('assignedMemberId', 'firstName lastName')
-        .lean();
+      const rawPages = await this.pageModel.aggregate([
+        { $match: pageFilter },
+        { $sort: { updatedAt: -1, createdAt: -1 } },
+        { $limit: 150 },
+        {
+          $project: {
+            title: 1,
+            columns: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            teamId: 1,
+            assignedMemberId: 1,
+            totalRows: { $size: { $ifNull: ['$rows', []] } },
+            workedRows: {
+              $filter: {
+                input: { $ifNull: ['$rows', []] },
+                as: 'row',
+                cond: {
+                  $or: [
+                    {
+                      $and: [
+                        { $ne: ['$$row.disposition', null] },
+                        { $ne: ['$$row.disposition', ''] },
+                        { $ne: ['$$row.disposition', '-'] },
+                      ],
+                    },
+                    {
+                      $and: [
+                        { $ne: ['$$row.feedback_notes', null] },
+                        { $ne: ['$$row.feedback_notes', ''] },
+                        { $ne: ['$$row.feedback_notes', '-'] },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+            previewRows: {
+              $slice: [{ $ifNull: ['$rows', []] }, 50],
+            },
+          },
+        },
+        {
+          $project: {
+            title: 1,
+            columns: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            teamId: 1,
+            assignedMemberId: 1,
+            totalRows: 1,
+            remarksFilled: { $size: '$workedRows' },
+            workedSlice: { $slice: ['$workedRows', 100] },
+            previewRows: 1,
+          },
+        },
+        {
+          $lookup: {
+            from: 'teams',
+            localField: 'teamId',
+            foreignField: '_id',
+            as: 'teamDoc',
+          },
+        },
+        {
+          $lookup: {
+            from: 'users',
+            localField: 'assignedMemberId',
+            foreignField: '_id',
+            as: 'memberDoc',
+          },
+        },
+      ]);
 
-      result = (pages || []).map((page: any) => {
+      result = (rawPages || []).map((page: any) => {
         if (!page) return null;
-        const teamObj: any = page.teamId;
-        const memberObj: any = page.assignedMemberId;
-        const teamName = teamObj?.name || 'Unassigned';
-        const assignedTo = memberObj
-          ? `${memberObj.firstName || ''} ${memberObj.lastName || ''}`.trim() || 'Unassigned'
+        const teamDoc = Array.isArray(page.teamDoc) ? page.teamDoc[0] : null;
+        const memberDoc = Array.isArray(page.memberDoc) ? page.memberDoc[0] : null;
+        const teamName = teamDoc?.name || 'Unassigned';
+        const assignedTo = memberDoc
+          ? `${memberDoc.firstName || ''} ${memberDoc.lastName || ''}`.trim() || 'Unassigned'
           : 'Unassigned';
 
         // Build column key → name map
@@ -1394,48 +1466,17 @@ export class NotionPagesService implements OnModuleInit {
         });
         if (!remarkKeys.includes('feedback_notes')) remarkKeys.push('feedback_notes');
 
-        // Robust in-memory counting (guaranteed accurate totalRows, remarksFilled, remarksEmpty)
-        const safeRows = Array.isArray(page.rows) ? page.rows : [];
-        const totalRows = safeRows.length;
-        let remarksFilled = 0;
-        let remarksEmpty = 0;
+        // Combine worked rows and preview rows up to 100 max with deduplication
+        const combined = [...(page.workedSlice || []), ...(page.previewRows || [])];
+        const seen = new Set<string>();
+        const mappedRows: any[] = [];
 
-        safeRows.forEach((row: any) => {
-          if (!row || typeof row !== 'object') return;
-          const hasDisp = row.disposition && String(row.disposition).trim() !== '';
-          const hasNotes = row.feedback_notes && String(row.feedback_notes).trim() !== '';
-          const hasCustomRemark = remarkKeys.some(
-            (k) => k !== 'feedback_notes' && row[k] && String(row[k]).trim() !== '',
-          );
+        for (const row of combined) {
+          if (!row || typeof row !== 'object') continue;
+          const rowKey = row.id ? String(row.id) : JSON.stringify(row);
+          if (seen.has(rowKey)) continue;
+          seen.add(rowKey);
 
-          if (hasDisp || hasNotes || hasCustomRemark) {
-            remarksFilled++;
-          } else {
-            remarksEmpty++;
-          }
-        });
-
-        // Prioritize worked rows (disposition / notes) followed by blank rows (up to 100 preview rows)
-        const workedRows: any[] = [];
-        const unworkedRows: any[] = [];
-        safeRows.forEach((row: any) => {
-          if (!row || typeof row !== 'object') return;
-          const hasDisp = row.disposition && String(row.disposition).trim() !== '';
-          const hasNotes = row.feedback_notes && String(row.feedback_notes).trim() !== '';
-          const hasCustom = remarkKeys.some(
-            (k) => k !== 'feedback_notes' && row[k] && String(row[k]).trim() !== '',
-          );
-          if (hasDisp || hasNotes || hasCustom) {
-            workedRows.push(row);
-          } else {
-            unworkedRows.push(row);
-          }
-        });
-
-        const previewRows = [...workedRows, ...unworkedRows].slice(0, 100);
-
-        // Map preview rows for sheet table and action hub
-        const mappedRows = previewRows.map((row: any) => {
           const readable: Record<string, any> = { _rowId: String(row.id || '') };
           Object.entries(row).forEach(([key, value]) => {
             if (key === 'id') return;
@@ -1450,8 +1491,13 @@ export class NotionPagesService implements OnModuleInit {
           if (readable.disposition === undefined) readable.disposition = '';
           if (readable.feedback_notes === undefined) readable.feedback_notes = '';
           if (readable['Remarks'] === undefined) readable['Remarks'] = readable.feedback_notes || '';
-          return readable;
-        });
+          mappedRows.push(readable);
+          if (mappedRows.length >= 100) break;
+        }
+
+        const totalRows = page.totalRows || 0;
+        const remarksFilled = page.remarksFilled || 0;
+        const remarksEmpty = Math.max(0, totalRows - remarksFilled);
 
         return {
           _id: page._id ? page._id.toString() : String(page._id),
