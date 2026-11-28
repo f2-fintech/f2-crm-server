@@ -35,6 +35,9 @@ export class LeadsService {
     private readonly lifecycleEventsService: LifecycleEventsService,
   ) { }
 
+  private leadsStatsCache: { timestamp: number; data: any } | null = null;
+  private readonly LEADS_STATS_TTL = 45 * 1000; // 45 seconds cache
+
   async create(createLeadDto: CreateLeadDto, userId?: any): Promise<Lead> {
     const leadId = 'L' + Date.now().toString();
     const createdLead = new this.leadModel({
@@ -353,6 +356,11 @@ export class LeadsService {
   }
 
   async getDashboardStats(): Promise<any> {
+    const now = Date.now();
+    if (this.leadsStatsCache && now - this.leadsStatsCache.timestamp < this.LEADS_STATS_TTL) {
+      return this.leadsStatsCache.data;
+    }
+
     const [
       totalLeads,
       convertedLeads,
@@ -472,14 +480,14 @@ export class LeadsService {
         { loanType: { $regex: 'doctor', $options: 'i' } },
         { omsLeadType: { $regex: 'doctor', $options: 'i' } }
       ]
-    });
+    }).select('omsTicketStatus').lean();
 
     let doctorApproved = 0;
     let doctorRejected = 0;
     let doctorDisbursed = 0;
     let doctorPending = 0;
 
-    doctorLeadsList.forEach(lead => {
+    doctorLeadsList.forEach((lead: any) => {
       const s = (lead.omsTicketStatus || '').toLowerCase();
       if (s.includes('disburse')) doctorDisbursed++;
       else if (s.includes('approv')) doctorApproved++;
@@ -487,7 +495,7 @@ export class LeadsService {
       else doctorPending++;
     });
 
-    return {
+    const responseData = {
       success: true,
       data: {
         overview: {
@@ -513,6 +521,9 @@ export class LeadsService {
         insights
       },
     };
+
+    this.leadsStatsCache = { timestamp: now, data: responseData };
+    return responseData;
   }
 
   async findOne(id: string): Promise<Lead> {

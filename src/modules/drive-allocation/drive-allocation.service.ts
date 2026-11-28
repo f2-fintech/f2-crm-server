@@ -68,6 +68,8 @@ export class DriveAllocationService {
     'https://drive.google.com/drive/folders/1MBSZMvggdJK-veLYmel8Kp-HSvywtOdj';
 
   private scanningPromise: Promise<DiscoveredDriveFile[]> | null = null;
+  private filesListCache: { timestamp: number; data: DiscoveredDriveFile[] } | null = null;
+  private readonly FILES_CACHE_TTL = 30 * 1000; // 30 seconds cache for instant response
 
   // Local disk cache folder (keeps 0 unallocated rows in MongoDB Atlas)
   private readonly cacheDir = path.join(process.cwd(), 'data', 'drive-cache');
@@ -119,21 +121,25 @@ export class DriveAllocationService {
    */
   async getAllocatedCount(fileId: string): Promise<number> {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const allocations = await this.driveRecordModel
-      .find({
-        sourceFileId: fileId,
-        status: RecordAllocationStatus.ALLOCATED,
-        $or: [
-          { allocatedAt: { $gte: sevenDaysAgo } },
-          { allocatedAt: null, createdAt: { $gte: sevenDaysAgo } },
-        ],
-      })
-      .select('allocatedCount records')
-      .lean();
-    return allocations.reduce(
-      (sum, a) => sum + (a.allocatedCount || a.records?.length || 0),
-      0,
-    );
+    const agg = await this.driveRecordModel.aggregate([
+      {
+        $match: {
+          sourceFileId: fileId,
+          status: RecordAllocationStatus.ALLOCATED,
+          $or: [
+            { allocatedAt: { $gte: sevenDaysAgo } },
+            { allocatedAt: null, createdAt: { $gte: sevenDaysAgo } },
+          ],
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$allocatedCount' },
+        },
+      },
+    ]);
+    return agg[0]?.total || 0;
   }
 
   /**
@@ -218,6 +224,7 @@ export class DriveAllocationService {
    * Recursive scanner using embeddedfolderview to find all Google Spreadsheets
    */
   async scanDriveFolder(folderUrl?: string): Promise<DiscoveredDriveFile[]> {
+    this.filesListCache = null;
     if (this.scanningPromise) {
       return await this.scanningPromise;
     }
@@ -404,23 +411,60 @@ export class DriveAllocationService {
    * Get all files from Drive
    */
   async getFilesList(): Promise<DiscoveredDriveFile[]> {
-    let source = await this.driveSourceModel.findOne({ isActive: true });
+    const now = Date.now();
+    if (this.filesListCache && now - this.filesListCache.timestamp < this.FILES_CACHE_TTL) {
+      return this.filesListCache.data;
+    }
+
+    let source = await this.driveSourceModel.findOne({ isActive: true }).lean();
     if (!source || !source.files || source.files.length === 0) {
       return await this.scanDriveFolder();
     }
 
-    for (const f of source.files) {
-      const allocated = await this.getAllocatedCount(f.fileId);
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const aggCounts = await this.driveRecordModel.aggregate([
+      {
+        $match: {
+          status: RecordAllocationStatus.ALLOCATED,
+          $or: [
+            { allocatedAt: { $gte: sevenDaysAgo } },
+            { allocatedAt: null, createdAt: { $gte: sevenDaysAgo } },
+          ],
+        },
+      },
+      {
+        $group: {
+          _id: '$sourceFileId',
+          totalAllocated: { $sum: '$allocatedCount' },
+        },
+      },
+    ]);
+
+    const allocatedMap = new Map<string, number>();
+    for (const c of aggCounts) {
+      if (c._id) allocatedMap.set(c._id, c.totalAllocated || 0);
+    }
+
+    const files = source.files.map((f: any) => {
+      const allocated = allocatedMap.get(f.fileId) || 0;
       const trueTotal = Math.max(
         this.fileTrueCounts[f.fileId] || 0,
         f.totalRecords || 0,
       );
+      return {
+        ...f,
+        totalRecords: trueTotal,
+        allocatedRecords: allocated,
+        availableRecords: Math.max(0, trueTotal - allocated),
+      };
+    });
 
-      f.totalRecords = trueTotal;
-      f.allocatedRecords = allocated;
-      f.availableRecords = Math.max(0, trueTotal - allocated);
-    }
-    return source.files;
+    this.filesListCache = {
+      timestamp: now,
+      data: files,
+    };
+
+    return files;
   }
 
   /**
