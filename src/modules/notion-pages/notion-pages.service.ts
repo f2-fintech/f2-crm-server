@@ -34,14 +34,19 @@ export class NotionPagesService implements OnModuleInit {
   private treeCacheMap = new Map<string, { data: any; timestamp: number }>();
   private readonly TREE_CACHE_TTL = 45 * 1000; // 45 seconds cache for instant tree loading
 
+  private dashboardStatsCacheMap = new Map<string, { data: any; timestamp: number }>();
+  private readonly DASHBOARD_STATS_TTL = 45 * 1000; // 45 seconds cache for ultra-fast dashboard
+
   public invalidateCache() {
     this.remarksCacheMap.clear();
     this.treeCacheMap.clear();
+    this.dashboardStatsCacheMap.clear();
   }
 
   public invalidateRemarksCache() {
     this.remarksCacheMap.clear();
     this.treeCacheMap.clear();
+    this.dashboardStatsCacheMap.clear();
   }
 
   public invalidateTreeCache() {
@@ -1693,76 +1698,73 @@ export class NotionPagesService implements OnModuleInit {
     const role = user.role?.toUpperCase() || 'EMPLOYEE';
     const userId = user._id ? user._id.toString() : user.id?.toString();
 
-    // --- PERFORMANCE: Use aggregation to count rows on DB side, never load rows into Node.js RAM ---
-    const REMARK_COLS = ['remark', 'feedback', 'comment', 'note', 'status', 'disposition', 'feedback_notes'];
+    const cacheKey = `${role}_${userId || 'all'}`;
+    const cached = this.dashboardStatsCacheMap.get(cacheKey);
+    const now = Date.now();
+    if (cached && now - cached.timestamp < this.DASHBOARD_STATS_TTL) {
+      return cached.data;
+    }
 
-    // For a set of sheet ObjectIds, return { sheetId -> { total, filled, empty } } via aggregation
+    const cacheAndReturn = (result: any) => {
+      this.dashboardStatsCacheMap.set(cacheKey, { timestamp: now, data: result });
+      return result;
+    };
+
+    // --- HIGH PERFORMANCE: In-document row counts on DB side without unwinding 930k rows into RAM ---
     const aggregateSheetStats = async (sheetIds: any[]): Promise<Record<string, { total: number; filled: number; empty: number }>> => {
       if (!sheetIds.length) return {};
       const safeIds = sheetIds.map((id) => this.toSafeObjectId(id)).filter(Boolean);
       if (!safeIds.length) return {};
 
-      // Build $or for hasRemark: check if any field whose key contains a remark keyword has a truthy value
-      // We use $objectToArray so we don't need to know column keys upfront
       const agg = await this.pageModel.aggregate([
         { $match: { _id: { $in: safeIds } } },
-        { $project: { rows: 1 } },
-        { $unwind: { path: '$rows', preserveNullAndEmptyArrays: false } },
         {
-          $addFields: {
-            rowPairs: { $objectToArray: '$rows' },
-          },
-        },
-        {
-          $addFields: {
-            hasRemark: {
-              $gt: [
-                {
-                  $size: {
-                    $filter: {
-                      input: '$rowPairs',
-                      as: 'pair',
-                      cond: {
+          $project: {
+            total: { $size: { $ifNull: ['$rows', []] } },
+            filled: {
+              $size: {
+                $filter: {
+                  input: { $ifNull: ['$rows', []] },
+                  as: 'r',
+                  cond: {
+                    $or: [
+                      {
                         $and: [
-                          {
-                            $gt: [
-                              {
-                                $size: {
-                                  $filter: {
-                                    input: REMARK_COLS,
-                                    as: 'kw',
-                                    cond: { $ne: [{ $indexOfCP: ['$$pair.k', '$$kw'] }, -1] },
-                                  },
-                                },
-                              },
-                              0,
-                            ],
-                          },
-                          { $ne: ['$$pair.v', ''] },
-                          { $ne: ['$$pair.v', null] },
+                          { $ne: ['$$r.disposition', null] },
+                          { $ne: ['$$r.disposition', ''] },
+                          { $ne: ['$$r.disposition', '-'] },
                         ],
                       },
-                    },
+                      {
+                        $and: [
+                          { $ne: ['$$r.feedback_notes', null] },
+                          { $ne: ['$$r.feedback_notes', ''] },
+                          { $ne: ['$$r.feedback_notes', '-'] },
+                        ],
+                      },
+                      {
+                        $and: [
+                          { $ne: ['$$r.remarks', null] },
+                          { $ne: ['$$r.remarks', ''] },
+                          { $ne: ['$$r.remarks', '-'] },
+                        ],
+                      },
+                    ],
                   },
                 },
-                0,
-              ],
+              },
             },
-          },
-        },
-        {
-          $group: {
-            _id: '$_id',
-            total: { $sum: 1 },
-            filled: { $sum: { $cond: ['$hasRemark', 1, 0] } },
-            empty: { $sum: { $cond: ['$hasRemark', 0, 1] } },
           },
         },
       ]).exec().catch(() => []);
 
       const map: Record<string, { total: number; filled: number; empty: number }> = {};
       (agg || []).forEach((r: any) => {
-        if (r._id) map[r._id.toString()] = { total: r.total || 0, filled: r.filled || 0, empty: r.empty || 0 };
+        if (r._id) {
+          const tot = r.total || 0;
+          const fil = r.filled || 0;
+          map[r._id.toString()] = { total: tot, filled: fil, empty: Math.max(0, tot - fil) };
+        }
       });
       return map;
     };
@@ -1858,7 +1860,7 @@ export class NotionPagesService implements OnModuleInit {
         }
       });
 
-      return {
+      return cacheAndReturn({
         role: 'ADMIN',
         summary: {
           totalSheets: grandTotalSheets,
@@ -1870,7 +1872,7 @@ export class NotionPagesService implements OnModuleInit {
         members: Object.values(memberMap)
           .filter((m: any) => m.sheetsCount > 0)
           .sort((a: any, b: any) => b.totalLeads - a.totalLeads),
-      };
+      });
     }
 
     if (['MANAGER', 'TEAM_LEADER'].includes(role)) {
@@ -1975,7 +1977,7 @@ export class NotionPagesService implements OnModuleInit {
 
       let teamName = await this.resolveUserTeamName(user);
 
-      return {
+      return cacheAndReturn({
         role,
         teamName,
         summary: {
@@ -1985,7 +1987,7 @@ export class NotionPagesService implements OnModuleInit {
           remarksEmpty,
         },
         members: Object.values(memberStatsMap),
-      };
+      });
     }
 
     // Default: Employee / Sourcer / Channel Partner
@@ -2027,7 +2029,7 @@ export class NotionPagesService implements OnModuleInit {
 
     const userTeamName = await this.resolveUserTeamName(user);
 
-    return {
+    return cacheAndReturn({
       role: 'EMPLOYEE',
       teamName: userTeamName,
       summary: {
@@ -2037,6 +2039,6 @@ export class NotionPagesService implements OnModuleInit {
         remarksEmpty,
       },
       sheets: sheetList,
-    };
+    });
   }
 }
