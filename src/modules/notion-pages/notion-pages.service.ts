@@ -231,17 +231,10 @@ export class NotionPagesService implements OnModuleInit {
         }
       }
 
-      // Team Leader check: either in same team, or TL is member of assignedUser's team
+      // Team Leader check: strictly direct reports
       if (['TEAM_LEADER', 'TL', 'LEADER'].includes(rawRole)) {
-        if (userTeamIdStr && assignedUserTeamStr === userTeamIdStr) return true;
-        if (assignedUserTeamStr) {
-          const inSameTeam = await this.teamModel.exists({
-            _id: this.toSafeObjectId(assignedUserTeamStr),
-            isActive: { $ne: false },
-            members: userObjId,
-          });
-          if (inSameTeam) return true;
-        }
+        if (assignedUser.reportsTo?.toString() === userStr) return true;
+        return false;
       }
 
       return false;
@@ -262,6 +255,110 @@ export class NotionPagesService implements OnModuleInit {
 
     if (page.createdBy?.toString() === userStr) return true;
     return false;
+  }
+
+  async resolveUserTeamName(user: any): Promise<string> {
+    try {
+      const rawRole = this.normalizeRole(user?.role);
+      const isAdmin = ['SUPER_ADMIN', 'ADMIN'].includes(rawRole);
+      if (isAdmin) return 'CRM Workspace';
+
+      if (['TEAM_LEADER', 'TL', 'LEADER'].includes(rawRole)) {
+        return `${user?.firstName || 'My'}’s Team`;
+      }
+
+      const userObjId = this.toSafeObjectId(user?._id);
+      const userTeamObjId = this.toSafeObjectId(user?.teamId);
+
+      // 1. By direct user.teamId
+      if (userTeamObjId) {
+        const t = await this.teamModel.findById(userTeamObjId).select('name').lean();
+        if (t?.name) return t.name;
+      }
+
+      // 2. By team membership in teams collection
+      if (userObjId) {
+        const t = await this.teamModel
+          .findOne({ members: userObjId, isActive: { $ne: false } })
+          .select('name')
+          .lean();
+        if (t?.name) return t.name;
+      }
+
+      // 3. By managerId of team
+      if (userObjId) {
+        const t = await this.teamModel
+          .findOne({ managerId: userObjId, isActive: { $ne: false } })
+          .select('name')
+          .lean();
+        if (t?.name) return t.name;
+      }
+
+      // 4. By assigned sheet's teamId
+      if (userObjId) {
+        const pageWithTeam = await this.pageModel
+          .findOne({
+            assignedMemberId: userObjId as any,
+            teamId: { $ne: null },
+            isDeleted: { $ne: true },
+          })
+          .select('teamId')
+          .lean();
+        if (pageWithTeam?.teamId) {
+          const t = await this.teamModel.findById(pageWithTeam.teamId).select('name').lean();
+          if (t?.name) return t.name;
+        }
+      }
+
+      // 5. By reportsTo (manager / team lead)
+      if (user?.reportsTo) {
+        const manager = await this.userModel.findById(user.reportsTo).select('firstName lastName teamId').lean();
+        if (manager) {
+          if (manager.teamId) {
+            const t = await this.teamModel.findById(manager.teamId).select('name').lean();
+            if (t?.name) return t.name;
+          }
+          const mgrName = `${manager.firstName} ${manager.lastName || ''}`.trim();
+          if (mgrName) return mgrName;
+        }
+      }
+
+      // 6. By assigned sheet's creator (e.g. sheet created by Manu Bhardwaj and assigned to this user)
+      if (userObjId) {
+        const assignedPage = await this.pageModel
+          .findOne({
+            assignedMemberId: userObjId as any,
+            isDeleted: { $ne: true },
+          })
+          .select('createdBy')
+          .lean();
+        if (assignedPage?.createdBy) {
+          const creator = await this.userModel.findById(assignedPage.createdBy).select('firstName lastName teamId').lean();
+          if (creator) {
+            if (creator.teamId) {
+              const t = await this.teamModel.findById(creator.teamId).select('name').lean();
+              if (t?.name) return t.name;
+            }
+            const creatorName = `${creator.firstName} ${creator.lastName || ''}`.trim();
+            if (creatorName) return creatorName;
+          }
+        }
+      }
+
+      // 7. Fallback for Team Leader or Manager
+      if (['TEAM_LEADER', 'TL', 'LEADER', 'MANAGER'].includes(rawRole)) {
+        if (user?.teamId) {
+          const t = await this.teamModel.findById(user.teamId).select('name').lean();
+          if (t?.name) return t.name;
+        }
+        return `${user?.firstName || 'My'}’s Team`;
+      }
+
+      return 'CRM Workspace';
+    } catch (err) {
+      console.error('[resolveUserTeamName] Error:', err);
+      return 'CRM Workspace';
+    }
   }
 
   async getTree(user: any) {
@@ -318,14 +415,14 @@ export class NotionPagesService implements OnModuleInit {
         if (userTeamStr) {
           try {
             teamQueryConds.push({ _id: new Types.ObjectId(userTeamStr) });
-          } catch (_) {}
+          } catch (_) { }
         }
 
         teamsPromise = teamQueryConds.length > 0
           ? this.teamModel
-              .find({ isActive: { $ne: false }, $or: teamQueryConds })
-              .select('_id name managerId members isActive')
-              .lean()
+            .find({ isActive: { $ne: false }, $or: teamQueryConds })
+            .select('_id name managerId members isActive')
+            .lean()
           : Promise.resolve([]);
 
         if (isManager) {
@@ -345,8 +442,8 @@ export class NotionPagesService implements OnModuleInit {
               isActive: { $ne: false },
               $or: [
                 ...(userObjId ? [{ reportsTo: userObjId }] : []),
-                ...(userTeamObjId ? [{ teamId: userTeamObjId }] : []),
                 ...(userObjId ? [{ _id: userObjId }] : []),
+                ...(user?.reportsTo ? [{ _id: this.toSafeObjectId(user.reportsTo) }] : []),
               ],
             })
             .select('_id firstName lastName email role teamId reportsTo isActive')
@@ -354,9 +451,9 @@ export class NotionPagesService implements OnModuleInit {
         } else {
           usersPromise = userObjId
             ? this.userModel
-                .find({ isActive: { $ne: false }, _id: userObjId })
-                .select('_id firstName lastName email role teamId reportsTo isActive')
-                .lean()
+              .find({ isActive: { $ne: false }, _id: userObjId })
+              .select('_id firstName lastName email role teamId reportsTo isActive')
+              .lean()
             : Promise.resolve([]);
         }
       }
@@ -370,19 +467,34 @@ export class NotionPagesService implements OnModuleInit {
 
       let allUsers = fetchedUsers;
 
-      // If manager or TL has team members from teams that weren't captured by teamId, fetch them
-      if (!isAdmin && (isManager || isTeamLeader)) {
-        const teamMemberIds = activeTeams.flatMap((t: any) =>
-          (t.members || []).map((m: any) => this.toSafeObjectId(m)),
-        ).filter(Boolean);
+      // If team leader or manager has extra relevant users (e.g. team manager)
+      if (!isAdmin) {
+        if (isManager) {
+          const teamMemberIds = activeTeams.flatMap((t: any) =>
+            (t.members || []).map((m: any) => this.toSafeObjectId(m)),
+          ).filter(Boolean);
 
-        if (teamMemberIds.length > 0) {
-          const extraUsers = await this.userModel
-            .find({ _id: { $in: teamMemberIds }, isActive: { $ne: false } })
-            .select('_id firstName lastName email role teamId reportsTo isActive')
-            .lean();
+          if (teamMemberIds.length > 0) {
+            const extraUsers = await this.userModel
+              .find({ _id: { $in: teamMemberIds }, isActive: { $ne: false } })
+              .select('_id firstName lastName email role teamId reportsTo isActive')
+              .lean();
 
-          allUsers = [...allUsers, ...extraUsers];
+            allUsers = [...allUsers, ...extraUsers];
+          }
+        } else if (isTeamLeader) {
+          const managerIds = activeTeams
+            .map((t: any) => this.toSafeObjectId(t.managerId?._id || t.managerId))
+            .filter(Boolean);
+
+          if (managerIds.length > 0) {
+            const extraManagers = await this.userModel
+              .find({ _id: { $in: managerIds }, isActive: { $ne: false } })
+              .select('_id firstName lastName email role teamId reportsTo isActive')
+              .lean();
+
+            allUsers = [...allUsers, ...extraManagers];
+          }
         }
       }
 
@@ -453,6 +565,14 @@ export class NotionPagesService implements OnModuleInit {
 
         const teamMembers = allUsers.filter((u: any) => {
           const uId = u._id.toString();
+          if (isTeamLeader) {
+            const mgrIdStr = team.managerId?._id?.toString() || team.managerId?.toString();
+            const isManagerOfTeam = mgrIdStr && mgrIdStr === uId;
+            const isMyReportsTo = user?.reportsTo && user.reportsTo.toString() === uId;
+            const isMe = uId === userStr;
+            const isMyDirectReport = u.reportsTo?.toString() === userStr;
+            return isManagerOfTeam || isMyReportsTo || isMe || isMyDirectReport;
+          }
           const matchesTeamId = u.teamId?.toString() === teamIdStr;
           const matchesMembers = teamMemberStrIds.includes(uId);
           const userPages = pagesByAssignedMember.get(uId) || [];
@@ -462,14 +582,28 @@ export class NotionPagesService implements OnModuleInit {
           return matchesTeamId || matchesMembers || matchesPageTeam;
         });
 
+        // Sort so Manager is first, then TL, then Members
+        const roleOrder: Record<string, number> = {
+          MANAGER: 1,
+          TEAM_LEADER: 2,
+          TL: 2,
+          LEADER: 2,
+          MEMBER: 3,
+        };
+        teamMembers.sort((a: any, b: any) => {
+          const rA = roleOrder[this.normalizeRole(a.role)] || 4;
+          const rB = roleOrder[this.normalizeRole(b.role)] || 4;
+          return rA - rB;
+        });
+
         const memberNodes = teamMembers.map((u: any) => {
           const userIdStr = u._id.toString();
           const roleLabel =
             u.role === 'MANAGER'
               ? 'Manager'
               : ['TEAM_LEADER', 'TL', 'LEADER'].includes(this.normalizeRole(u.role))
-              ? 'TL'
-              : 'Member';
+                ? 'TL'
+                : 'Member';
 
           const userPages = pagesByAssignedMember.get(userIdStr) || [];
           userPages.forEach((p: any) => {
@@ -495,10 +629,12 @@ export class NotionPagesService implements OnModuleInit {
           if (p._id) placedPageIds.add(p._id.toString());
         });
 
+        const folderTitle = team.name;
+
         return {
           _id: teamIdStr,
           id: teamIdStr,
-          title: team.name,
+          title: folderTitle,
           pageType: 'PAGE',
           section: 'SHARED',
           children: [...memberNodes, ...visibleGenericPages],
@@ -561,8 +697,8 @@ export class NotionPagesService implements OnModuleInit {
             ? u.role === 'MANAGER'
               ? 'Manager'
               : ['TEAM_LEADER', 'TL', 'LEADER'].includes(this.normalizeRole(u.role))
-              ? 'TL'
-              : 'Member'
+                ? 'TL'
+                : 'Member'
             : 'Member';
           const title = u ? `${u.firstName} ${u.lastName} (${roleLabel})` : `User (${uid.slice(-4)})`;
 
@@ -614,7 +750,10 @@ export class NotionPagesService implements OnModuleInit {
           (isAdmin || p.createdBy?.toString() === userStr || p.assignedMemberId?.toString() === userStr),
       );
 
+      const userTeamName = await this.resolveUserTeamName(user);
+
       const result = {
+        teamName: userTeamName,
         shared: [...teamFolders, ...extraSharedResult],
         private: privatePages,
         workspace: workspacePages,
@@ -685,11 +824,11 @@ export class NotionPagesService implements OnModuleInit {
     } else {
       teamUsers = userObjId
         ? await this.userModel
-            .find({
-              isActive: { $ne: false },
-              _id: userObjId,
-            })
-            .lean()
+          .find({
+            isActive: { $ne: false },
+            _id: userObjId,
+          })
+          .lean()
         : [];
     }
 
@@ -703,8 +842,8 @@ export class NotionPagesService implements OnModuleInit {
         u.role === 'MANAGER'
           ? 'Manager'
           : ['TEAM_LEADER', 'TL', 'LEADER'].includes(this.normalizeRole(u.role))
-          ? 'TL'
-          : 'Member';
+            ? 'TL'
+            : 'Member';
 
       return {
         _id: `user_${userIdStr}`,
@@ -790,12 +929,7 @@ export class NotionPagesService implements OnModuleInit {
           } else if (['TEAM_LEADER', 'TL', 'LEADER'].includes(rawRole)) {
             const hasAccess =
               targetUser.reportsTo?.toString() === userStr ||
-              targetUser.teamId?.toString() === user?.teamId?.toString() ||
-              (await this.teamModel.exists({
-                _id: this.toSafeObjectId(targetUser.teamId),
-                isActive: { $ne: false },
-                members: this.toSafeObjectId(userStr),
-              }));
+              targetUser._id?.toString() === userStr;
 
             if (!hasAccess) {
               throw new ForbiddenException('Not allowed to view this folder');
@@ -1839,13 +1973,7 @@ export class NotionPagesService implements OnModuleInit {
         }
       });
 
-      let teamName = 'My Team';
-      if (role === 'TEAM_LEADER') {
-        teamName = `${user.firstName || 'Team Leader'} Team`;
-      } else if (teamId) {
-        const t = await this.teamModel.findById(teamId).select('name').lean();
-        if (t) teamName = t.name;
-      }
+      let teamName = await this.resolveUserTeamName(user);
 
       return {
         role,
@@ -1897,8 +2025,11 @@ export class NotionPagesService implements OnModuleInit {
       };
     });
 
+    const userTeamName = await this.resolveUserTeamName(user);
+
     return {
       role: 'EMPLOYEE',
+      teamName: userTeamName,
       summary: {
         mySheets: mySheets.length,
         totalLeads,

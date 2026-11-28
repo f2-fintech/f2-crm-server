@@ -11,10 +11,13 @@ import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { DialerService } from './dialer.service';
 import { GetCallLogsDto } from './dto/get-call-logs.dto';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
 
 @ApiTags('Dialer')
 @ApiBearerAuth()
-@UseGuards(AuthGuard('jwt'))
+@UseGuards(AuthGuard('jwt'), RolesGuard)
+@Roles('SUPER_ADMIN', 'ADMIN')
 @Controller('dialer')
 export class DialerController {
   constructor(private readonly dialerService: DialerService) {}

@@ -144,7 +144,7 @@ export class TeamsService {
     return { message: 'Team members synced successfully' };
   }
 
-  async getHierarchy(teamId: string) {
+  async getHierarchy(teamId: string, requestUserId?: string) {
     const team = await this.teamModel.findById(teamId).lean();
     if (!team) {
       throw new NotFoundException('Team not found');
@@ -153,6 +153,7 @@ export class TeamsService {
     // Get all users in this team (explicitly cast to ObjectId to ensure match)
     const users = await this.userModel
       .find({ teamId: new Types.ObjectId(teamId) })
+      .select('_id firstName lastName email employeeId role profileImage reportsTo teamId')
       .lean();
 
     // Build tree function
@@ -161,15 +162,70 @@ export class TeamsService {
         (u) => u.reportsTo?.toString() === managerId,
       );
 
-      return directReports.map((report) => ({
-        id: report._id,
-        name: `${report.firstName} ${report.lastName}`,
-        role: report.role,
-        directReports: buildTree(report._id.toString()),
-      }));
+      return directReports.map((report) => {
+        const childReports = buildTree(report._id.toString());
+        return {
+          id: report._id,
+          name: `${report.firstName} ${report.lastName}`,
+          role: report.role,
+          email: report.email,
+          employeeId: report.employeeId,
+          profileImage: report.profileImage || null,
+          directReportsCount: childReports.length,
+          directReports: childReports,
+        };
+      });
     };
 
     const manager = await this.userModel.findById(team.managerId).lean();
+
+    let isTLRequest = false;
+    let tlUser: any = null;
+    if (requestUserId) {
+      const reqUser = await this.userModel.findById(requestUserId).lean();
+      if (
+        reqUser &&
+        ['TEAM_LEADER', 'TL', 'LEADER'].includes(
+          (reqUser.role || '').toUpperCase().replace(/[\s-]+/g, '_'),
+        )
+      ) {
+        isTLRequest = true;
+        tlUser = reqUser;
+      }
+    }
+
+    // If Team Leader: Show Manager at top -> TL -> TL's direct reports (excluding other TLs & branches)
+    if (isTLRequest && tlUser && manager) {
+      const tlReports = buildTree(tlUser._id.toString());
+      const tlNode = {
+        id: tlUser._id,
+        name: `${tlUser.firstName} ${tlUser.lastName}`,
+        role: tlUser.role,
+        email: tlUser.email,
+        employeeId: tlUser.employeeId,
+        profileImage: tlUser.profileImage || null,
+        directReportsCount: tlReports.length,
+        directReports: tlReports,
+      };
+
+      return {
+        teamName: team.name,
+        teamId: team._id,
+        manager: {
+          id: manager._id,
+          name: `${manager.firstName} ${manager.lastName}`,
+          role: manager.role,
+          email: manager.email,
+          employeeId: manager.employeeId,
+          profileImage: manager.profileImage || null,
+          directReportsCount: 1,
+          teamMembersCount: tlReports.length + 2,
+          directReports: [tlNode],
+        },
+      };
+    }
+
+    const managerReports = manager ? buildTree(manager._id.toString()) : [];
 
     return {
       teamName: team.name,
@@ -179,7 +235,12 @@ export class TeamsService {
             id: manager._id,
             name: `${manager.firstName} ${manager.lastName}`,
             role: manager.role,
-            directReports: buildTree(manager._id.toString()),
+            email: manager.email,
+            employeeId: manager.employeeId,
+            profileImage: manager.profileImage || null,
+            directReportsCount: managerReports.length,
+            teamMembersCount: team.members?.length || users.length,
+            directReports: managerReports,
           }
         : null,
     };
@@ -208,9 +269,55 @@ export class TeamsService {
     return { message: 'Team successfully deleted (deactivated)' };
   }
 
-  async findAll() {
-    return this.teamModel
+  async findAll(requestUserId?: string) {
+    const teams = await this.teamModel
       .find({ isActive: true })
-      .populate('managerId', 'firstName lastName email role');
+      .populate('managerId', 'firstName lastName email role')
+      .lean();
+
+    if (!requestUserId) {
+      return teams;
+    }
+
+    const reqUser = await this.userModel.findById(requestUserId).lean();
+    if (!reqUser) {
+      return teams;
+    }
+
+    const rawRole = (reqUser.role || '').toUpperCase().replace(/[\s-]+/g, '_');
+    const isTL = ['TEAM_LEADER', 'TL', 'LEADER'].includes(rawRole);
+
+    if (isTL) {
+      // Find all direct reports of this TL
+      const directReportIds = await this.userModel
+        .find({ reportsTo: reqUser._id, isActive: { $ne: false } })
+        .distinct('_id');
+
+      return teams.map((team: any) => {
+        const isMyTeam =
+          team._id.toString() === reqUser.teamId?.toString() ||
+          (team.members || []).some(
+            (m: any) => m.toString() === reqUser._id.toString(),
+          );
+
+        if (isMyTeam) {
+          const managerId = team.managerId?._id || team.managerId;
+          // TL sees: Manager, TL themself, and direct report members
+          const tlVisibleMembers = [
+            ...(managerId ? [managerId] : []),
+            reqUser._id,
+            ...directReportIds,
+          ];
+
+          return {
+            ...team,
+            members: tlVisibleMembers,
+          };
+        }
+        return team;
+      });
+    }
+
+    return teams;
   }
 }

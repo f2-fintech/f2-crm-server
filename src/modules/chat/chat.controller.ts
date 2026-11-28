@@ -27,6 +27,24 @@ export class ChatController {
     return await this.chatService.getChatSummary(req.user._id);
   }
 
+  @Get('channel/:channelId')
+  async getChannelMessages(@Param('channelId') channelId: string) {
+    return await this.chatService.getChannelMessages(channelId);
+  }
+
+  @Post('channel/:channelId')
+  async sendChannelMessage(
+    @Param('channelId') channelId: string,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    return await this.chatService.sendChannelMessage(
+      req.user._id,
+      channelId,
+      body,
+    );
+  }
+
   @Get(':userId')
   async getConversation(@Param('userId') userId: string, @Req() req: any) {
     return await this.chatService.getConversation(req.user._id, userId);
