@@ -23,6 +23,55 @@ export class ChatService {
     return await msg.save();
   }
 
+  async sendChannelMessage(
+    senderId: string,
+    channelId: string,
+    data: {
+      text?: string;
+      attachmentUrl?: string;
+      attachmentType?: string;
+      attachmentName?: string;
+    },
+  ) {
+    const msg = new this.chatModel({
+      senderId: new Types.ObjectId(senderId),
+      channelId,
+      text: data.text || '',
+      attachmentUrl: data.attachmentUrl,
+      attachmentType: data.attachmentType,
+      attachmentName: data.attachmentName,
+    });
+    return await msg.save();
+  }
+
+  async getChannelMessages(channelId: string) {
+    const messages = await this.chatModel
+      .find({ channelId })
+      .populate('senderId', 'firstName lastName role profilePicture')
+      .sort({ createdAt: 1 })
+      .limit(300)
+      .lean();
+
+    return messages.map((m: any) => ({
+      _id: m._id,
+      senderId: m.senderId?._id || m.senderId,
+      channelId: m.channelId,
+      senderName: m.senderId
+        ? `${m.senderId.firstName || ''} ${m.senderId.lastName || ''}`.trim()
+        : 'Team Member',
+      senderRole:
+        (typeof m.senderId?.role === 'object'
+          ? m.senderId?.role?.name
+          : m.senderId?.role) || 'Member',
+      senderAvatar: m.senderId?.profilePicture,
+      text: m.text || '',
+      attachmentUrl: m.attachmentUrl,
+      attachmentType: m.attachmentType,
+      attachmentName: m.attachmentName,
+      createdAt: (m as any).createdAt,
+    }));
+  }
+
   async getConversation(user1Id: string, user2Id: string) {
     return await this.chatModel
       .find({
@@ -64,6 +113,7 @@ export class ChatService {
 
     const summary = {};
     for (const msg of messages) {
+      if (!msg.receiverId) continue;
       const otherUser =
         msg.senderId.toString() === userId
           ? msg.receiverId.toString()

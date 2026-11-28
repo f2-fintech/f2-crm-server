@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { IsString, IsArray, IsOptional, IsObject } from 'class-validator';
@@ -53,16 +54,16 @@ export class TeamsController {
     status: 200,
     description: 'Teams fetched successfully',
   })
-  findAll() {
-    return this.teamsService.findAll();
+  findAll(@Query('userId') userId?: string) {
+    return this.teamsService.findAll(userId);
   }
 
   @Get('hierarchy/:id')
   @ApiOperation({
     summary: 'Get Team Hierarchy',
   })
-  getHierarchy(@Param('id') id: string) {
-    return this.teamsService.getHierarchy(id);
+  getHierarchy(@Param('id') id: string, @Query('userId') userId?: string) {
+    return this.teamsService.getHierarchy(id, userId);
   }
 
   @Post(':id/members')
